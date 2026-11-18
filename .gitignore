@@ -10,3 +10,4 @@ credentials.json
 .streamlit/secrets.toml
 .taste-skill/
 email_settings.json
+uploads/

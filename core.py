@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
 import io
 import json
 import os
@@ -20,6 +21,7 @@ SUBJECT = "FEU TECH - DARRYLL PAJAGANAS - Internship Application - BSCSSE - 2TSY
 FIELDS = ("company_name", "hr_email", "contact_person", "relevant_skills")
 PLACEHOLDER = re.compile(r"\{[^{}]*\}")
 EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
+MAX_CV_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
 def parse_recipients(value) -> list[str]:
@@ -112,6 +114,38 @@ def validate_pdf(value: str) -> Path:
         if file.read(5) != b"%PDF-":
             raise ValueError("CV file does not have a PDF signature")
     return path
+
+
+def save_uploaded_cv(directory: Path, filename: str, data: bytes) -> Path:
+    """Save an immutable local PDF outside the publicly served static directory."""
+    name = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    if Path(name).suffix.lower() != ".pdf":
+        raise ValueError("Upload a .pdf file")
+    if not data or len(data) > MAX_CV_UPLOAD_BYTES:
+        raise ValueError("Upload a nonempty PDF no larger than 20 MB")
+    if not data.startswith(b"%PDF-"):
+        raise ValueError("The uploaded file does not have a PDF signature")
+    stem = re.sub(r"[^A-Za-z0-9._ -]", "_", Path(name).stem).strip(" .")[:100] or "CV"
+    if stem.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)], *[f"LPT{i}" for i in range(1, 10)]}:
+        stem = "CV-" + stem
+    # A changed PDF gets a different directory, preserving confirmed attachments.
+    folder = directory.resolve() / hashlib.sha256(data).hexdigest()
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / (stem + ".pdf")
+    if target.exists():
+        if target.read_bytes() != data:
+            raise ValueError("The saved upload was modified; restore or remove it before uploading again")
+        return validate_pdf(str(target))
+    fd, temporary = tempfile.mkstemp(dir=folder, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as file:
+            file.write(data)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return validate_pdf(str(target))
 
 
 def render_template(template: str, company: Company) -> str:

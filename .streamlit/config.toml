@@ -2,16 +2,17 @@
 address = "127.0.0.1"
 headless = true
 enableStaticServing = true
+maxUploadSize = 20
 
 [theme]
 base = "light"
 primaryColor = "#2563EB"
-backgroundColor = "#F8FAFC"
+backgroundColor = "#CBD5E1"
 secondaryBackgroundColor = "#F1F5F9"
 textColor = "#0F172A"
-borderColor = "#E2E8F0"
+borderColor = "#94A3B8"
 dataframeHeaderBackgroundColor = "#F1F5F9"
-dataframeBorderColor = "#E2E8F0"
+dataframeBorderColor = "#94A3B8"
 showWidgetBorder = true
 baseRadius = "0.5rem"
 font = "Inter"

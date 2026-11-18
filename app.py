@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 from core import (SUBJECT, FIELDS, PLACEHOLDER, Company, CompanyStore, EmailSettings,
                   atomic_text, email_payload, import_companies, render_template,
-                  run_batch, validate_pdf, load_email_settings, save_email_settings)
+                  run_batch, validate_pdf, load_email_settings, save_email_settings, save_uploaded_cv)
 from mcp_client import GmailMCPClient
 from ui import company_table, preview_metadata, status_pill, stylesheet
 
@@ -39,6 +39,23 @@ def reload_table():
 
 def dismiss_confirmation():
     st.session_state.pop("confirmation_job", None)
+
+
+def update_uploaded_cv():
+    uploaded = st.session_state.get("cv_upload")
+    st.session_state.pop("cv_upload_error", None)
+    previous = st.session_state.pop("uploaded_cv_path", None)
+    if uploaded is None:
+        if st.session_state.get("cv_path") == previous:
+            st.session_state.cv_path = ""
+        return
+    try:
+        path = save_uploaded_cv(ROOT / "uploads" / "cvs", uploaded.name, uploaded.getvalue())
+        st.session_state.cv_path = str(path)
+        st.session_state.uploaded_cv_path = str(path)
+    except (ValueError, OSError) as exc:
+        st.session_state.cv_path = ""
+        st.session_state.cv_upload_error = str(exc)
 
 
 @st.dialog("Confirm application batch", width="large", on_dismiss=dismiss_confirmation)
@@ -106,7 +123,15 @@ def main():
                     st.json(st.session_state.capabilities)
             st.caption("Last discovery result. Each batch reconnects; the OAuth account determines the sender.")
         with path_col:
-            cv_path = st.text_input("PDF CV path", value=os.getenv("CV_FILE_PATH", ""), disabled=job_running)
+            if "cv_path" not in st.session_state:
+                st.session_state.cv_path = os.getenv("CV_FILE_PATH", "")
+            st.file_uploader("Upload PDF CV", type=["pdf"], key="cv_upload",
+                             on_change=update_uploaded_cv, disabled=job_running,
+                             help="Choose a PDF up to 20 MB. It is saved locally and selected as your attachment.")
+            st.caption("Upload a PDF up to 20 MB, or enter a local path below.")
+            if st.session_state.get("cv_upload_error"):
+                st.error(st.session_state.cv_upload_error)
+            cv_path = st.text_input("PDF CV path", key="cv_path", disabled=job_running)
             try:
                 pdf = validate_pdf(cv_path)
                 st.markdown(status_pill("sent", "Valid PDF Found"), unsafe_allow_html=True)

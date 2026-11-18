@@ -77,7 +77,21 @@ the requested `npx -y @gongrzhe/server-gmail-autoauth-mcp` invocation.
 | `MCP_SERVER_COMMAND` | Executable, normally `npx.cmd` on Windows or `npx` elsewhere |
 | `MCP_SERVER_ARGS` | JSON array of argument strings; never a shell command string |
 
+Upload your PDF using **Upload PDF CV**, or paste an existing local path. Uploads
+are limited to 20 MB and checked for a `.pdf` extension and PDF signature before
+being selected. The chosen file fills **PDF CV path** and is automatically used
+in previews and confirmed draft/send batches.
+
+Uploads are saved under local, Git-ignored `uploads/cvs/`, outside the public
+static folder. Different PDF contents get different directories, so replacing an
+upload does not overwrite a previously confirmed attachment. A safe version of
+the original filename is retained for Gmail. Clearing the upload deselects it
+when its saved path is still active; a manually entered replacement path is kept.
+Removing the selection does not delete the saved local file. Uploading by itself
+does not send anything to Gmail.
+
 The PDF path input overrides the environment setting for the current session.
+After restarting or opening a new session, upload again or paste the saved path.
 To retain a new path after restarting, edit `.env`. A valid file must exist, have
 a `.pdf` extension, and start with a PDF signature. This checks the file type,
 not whether its pages contain a complete or correct CV.
@@ -195,8 +209,8 @@ Run tests without Gmail credentials or any real email calls:
 node --test tests/company_table.test.cjs
 ```
 
-The light theme uses crisp slate surfaces (#F8FAFC canvas, #FFFFFF cards,
-#F1F5F9 inputs and previews, #E2E8F0 borders), Corporate Cobalt accents, and four semantic status
+The light theme uses stepped gray surfaces (#CBD5E1 canvas, #E2E8F0 cards,
+#F1F5F9 inputs and previews, #94A3B8 borders), Corporate Cobalt accents, and four semantic status
 palettes. Company fields save on blur or Enter; the table supports search, page
 sizes, and selecting the visible page. Selections are retained across searches
 and pages. Template and Email preview tabs share one writing panel. Reduced-motion

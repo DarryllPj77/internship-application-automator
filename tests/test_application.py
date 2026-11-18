@@ -14,7 +14,7 @@ from streamlit.testing.v1 import AppTest
 
 from core import (SUBJECT, Company, CompanyStore, EmailSettings, atomic_text, email_payload,
                   exclusive_lock, import_companies, render_template, run_batch,
-                  load_email_settings, save_email_settings)
+                  load_email_settings, save_email_settings, save_uploaded_cv)
 from mcp_client import GmailConnection, GmailMCPClient
 from ui import preview_metadata, status_pill
 
@@ -43,6 +43,34 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(payload["subject"], SUBJECT)
         self.assertEqual(payload["attachments"], [str(self.pdf.resolve())])
         self.assertEqual(payload["body"], "Dear Hiring Team, Acme: Python")
+
+    def test_uploaded_pdf_is_saved_safely_and_used_as_attachment(self):
+        data = b"%PDF-1.4\nUploaded CV\n%%EOF"
+        directory = self.root / "uploads" / "cvs"
+        saved = save_uploaded_cv(directory, "../../CV with spaces.PDF", data)
+        self.assertTrue(saved.is_relative_to(directory.resolve()))
+        self.assertEqual(saved.name, "CV with spaces.pdf")
+        self.assertEqual(saved.read_bytes(), data)
+        self.assertEqual(email_payload(self.company, "Hi", str(saved))["attachments"], [str(saved)])
+        self.assertEqual(save_uploaded_cv(directory, "CV with spaces.PDF", data), saved)
+        self.assertEqual(save_uploaded_cv(directory, "CON.pdf", data).name, "CV-CON.pdf")
+
+    def test_changed_upload_does_not_overwrite_confirmed_attachment(self):
+        directory = self.root / "uploads"
+        first = save_uploaded_cv(directory, "resume.pdf", b"%PDF-1.4\nfirst")
+        confirmed = email_payload(self.company, "Hi", str(first))
+        second = save_uploaded_cv(directory, "resume.pdf", b"%PDF-1.4\nsecond")
+        self.assertNotEqual(first, second)
+        self.assertEqual(Path(confirmed["attachments"][0]).read_bytes(), b"%PDF-1.4\nfirst")
+
+    def test_invalid_uploads_are_rejected_before_creating_files(self):
+        directory = self.root / "uploads"
+        for name, data in [("cv.txt", b"%PDF-1.4"), ("cv.pdf", b"not a PDF"), ("cv.pdf", b"")]:
+            with self.subTest(name=name, data=data), self.assertRaises(ValueError):
+                save_uploaded_cv(directory, name, data)
+        with patch("core.MAX_CV_UPLOAD_BYTES", 8), self.assertRaisesRegex(ValueError, "20 MB"):
+            save_uploaded_cv(directory, "cv.pdf", b"%PDF-1.4\nToo big")
+        self.assertFalse(directory.exists())
 
     def test_validation_blocks_bad_cv_email_tokens_and_sample_recipients(self):
         for value in ["bad", "a@b", "x@y.com\nBcc: other@z.com", "a@b.com,c@d.com"]:
@@ -253,6 +281,49 @@ class ApplicationTests(unittest.TestCase):
 
 
 class DashboardTests(unittest.TestCase):
+    def test_upload_activates_cv_and_clear_preserves_a_manual_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            company = Company(company_name="Upload Test", hr_email="hr@acme.com",
+                              contact_person="HR", relevant_skills="Python")
+            CompanyStore(root / "companies.json")._write([company])
+            atomic_text(root / "template.txt", "Hello {company_name}")
+            code = (ROOT / "app.py").read_text(encoding="utf-8").replace(
+                "ROOT = Path(__file__).resolve().parent", f"ROOT = Path({str(root)!r})")
+            data = b"%PDF-1.4\nUploaded CV"
+            uploaded = SimpleNamespace(name="Uploaded CV.pdf", getvalue=lambda: data)
+            events = [uploaded]
+            def uploader(label, **kwargs):
+                import streamlit as st
+                if label == "Upload PDF CV" and events:
+                    st.session_state.cv_upload = events.pop(0)
+                    kwargs["on_change"]()
+                return None
+            with patch.dict(os.environ, {"CV_FILE_PATH": ""}), patch("streamlit.file_uploader", side_effect=uploader):
+                app = AppTest.from_string(code, default_timeout=30).run()
+                self.assertFalse(app.exception)
+                path_input = next(t for t in app.text_input if t.label == "PDF CV path")
+                saved_path = Path(path_input.value)
+                self.assertEqual(saved_path.read_bytes(), data)
+                self.assertTrue(any("Valid PDF Found" in item.value for item in app.markdown))
+                events.append(None)
+                app.run()
+                self.assertEqual(next(t for t in app.text_input if t.label == "PDF CV path").value, "")
+                self.assertTrue(saved_path.exists())
+                events.append(uploaded)
+                app.run()
+                manual = root / "manual.pdf"
+                manual.write_bytes(b"%PDF-1.4\nManual CV")
+                next(t for t in app.text_input if t.label == "PDF CV path").set_value(str(manual)).run()
+                events.append(None)
+                app.run()
+                self.assertEqual(next(t for t in app.text_input if t.label == "PDF CV path").value, str(manual))
+                events.append(SimpleNamespace(name="bad.pdf", getvalue=lambda: b"invalid"))
+                app.run()
+                self.assertFalse(app.exception)
+                self.assertEqual(next(t for t in app.text_input if t.label == "PDF CV path").value, "")
+                self.assertTrue(any("PDF signature" in error.value for error in app.error))
+
     def test_preview_metadata_escapes_user_content(self):
         rendered = preview_metadata('<img src=x onerror=alert(1)>', SUBJECT, 'CV.pdf')
         self.assertNotIn('<img', rendered)
