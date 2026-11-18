@@ -120,7 +120,7 @@ def main():
             sending = st.toggle("Send Mode (Direct Send)", value=False, disabled=job_running)
             mode = "send" if sending else "draft"
             if sending:
-                st.markdown(status_pill("failed", "Direct delivery"), unsafe_allow_html=True)
+                st.markdown(status_pill("drafted", "Send Mode"), unsafe_allow_html=True)
                 st.caption("Sends immediately after confirmation. A 15–30s pause separates emails.")
             else:
                 st.markdown(status_pill("drafted", "Draft Mode"), unsafe_allow_html=True)
@@ -146,7 +146,9 @@ def main():
                 st.error(f"Copy settings not saved. Fix CC / BCC before running a batch: {exc}")
     counters = st.columns(4)
     for column, status in zip(counters, ("pending", "drafted", "sent", "failed")):
-        column.metric(status.title(), sum(c.status == status for c in companies))
+        with column, st.container(key=f"kpi_{status}"):
+            st.markdown(status_pill(status), unsafe_allow_html=True)
+            st.metric(status.title(), sum(c.status == status for c in companies), label_visibility="collapsed")
 
     with st.container(key="workspace_grid"):
         left, right = st.columns([1.4, 1], gap="small")

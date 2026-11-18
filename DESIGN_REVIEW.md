@@ -1,3 +1,75 @@
+# Latest surface update: Crisp Slate (2026-11-18)
+
+The latest requested surfaces supersede the history below: #F8FAFC canvas,
+#FFFFFF cards/modals, #F1F5F9 inputs/variable chips/table headers/previews,
+and #E2E8F0 borders. No replacement accent value was specified, so Corporate
+Cobalt actions, existing status colors, and selected-row behavior remain.
+
+Verification: 21 Python and 5 Node table tests passed, whitespace checks passed,
+and the updated desktop render was inspected. The broader marketing-page gate
+was not rerun for this surface-token update. Older gate results below are historical.
+
+---
+
+# Latest color follow-up: layered cool slate (2026-11-18)
+
+Current colors supersede the historical palette below: #E2E8F0 canvas,
+#F1F5F9 panels/modals, #F8FAFC nested fields/table headers/email previews,
+#DBEAFE selected rows, #CBD5E1 borders, and unchanged #2563EB/#1D4ED8 actions.
+No pure-white surface definitions remain in the app theme or custom UI styles.
+Table checkboxes use explicit mist/cobalt styling rather than native white fills.
+
+Verification: 21 Python tests and 5 Node table tests passed. Inspected desktop
+and phone renders. Mail behavior was not changed. This targeted token update did
+not rerun the broader marketing-page gate; the gate results below are historical.
+
+---
+
+GATE: FAIL 22 (Corporate Cobalt styling review, 2026-11-18)
+
+# Executive Tech & Corporate styling review
+
+Applied the exact requested canvas, cobalt/royal accents, ice-blue selection, crisp slate borders, disabled CTA colors, and semantic status palettes to both the Streamlit dashboard and the embedded table. KPI cards now include their matching status pills. Kickers use uppercase Inter, 11px, 600 weight, .06em tracking. KPI digits explicitly use Obsidian Ink. Focus rings use cobalt at 25% opacity. Existing mail, template, recipient, and batch behaviors were preserved.
+
+Verification: 21 Python tests and 5 Node table tests passed. Whitespace checks passed. Inspected final 1440px desktop and 390px phone renders; the desktop capture includes the gray zero-selection CTA. Browser captures and raw checker reports remain in ignored `.taste-skill/`. No emails were sent during verification.
+
+The gate reports 22 FAIL and 32 WARN findings. There are no waivers. Several requirements intentionally differ from its marketing-page rules: this is a working multi-panel application, the exact muted token measures 6.92:1 against the requested canvas (the checker requires 7:1 for text it classifies as body), real template-variable controls contain the word placeholder, and the brief requires prominent KPI numerals and padded cards. The checker also flags nested Streamlit wrappers as clipped KPI rows; the inspected desktop capture shows all four complete cards and values. Streamlit chrome, `.wrap` conventions, and marketing hero/moment rules remain checker limitations. No universal gate or accessibility pass is claimed.
+
+No new images, assumed facts, stand-ins, client asset slots, or decorative scenes were introduced. Local Inter and JetBrains Mono assets remain the font pairing. No new performance benchmark was run for this token-only styling update; earlier measurements below are historical, not new results.
+
+## Current open FAIL findings
+
+- **placeholder**: "placeholder" is a placeholder left on the page
+- **copy-headings**: "Target companies" names no product, part, place or section (3 headings like it; at most one brand line per page) (and 2 more like it: "Compose & preview", "Batch activity")
+- **copy-actions**: 6 actions in the hero ("Test MCP Connection", "Select all pending", "{contact_person}", "{company_name}", "{relevant_skills}", "Create Drafts for Selected (0)"); at most 2
+- **heading-scale**: the figure "3" is set at 30px, larger than the section headings (h2 20px); 3 more like it
+- **stagger**: 4 rows start at 3 different left offsets (+0, +21, +13, +0px)
+- **text-contrast**: body text in #475569 on #f1f5f9 reads 6.92:1 (needs 7:1)
+- **moment-none**: a software page (--type) deals no moment: every kind carries one, two on a long page (moments.md)
+- **hero-screen**: the hero ends at 2328px on a 900px screen, 1428px below the fold: it ends at the fold, 1px either way (SR-1)
+- **one-section**: a <div> sits directly in <main>: every part of <main> is a <section> (SR-4)
+- **one-section**: a band: a box 94% of the section wide on a ground of its own that holds only text: the section's own ground is the band (SR-4)
+- **one-section**: a band: a box 91% of the section wide on a ground of its own that holds only text: the section's own ground is the band (SR-4)
+- **one-heading**: the hero holds an h2 (3): its heading is the h1, and an h2 opens the next section (SR-5)
+- **container-edges**: the nav's content runs 1328px from the left and 18px from the right (read from its outermost blocks: no .wrap): the page's container starts at 40px; 1328 and 18px are not one margin; the margin is 64-120px at 1440px (one container, equal margins, 2px either way) (SR-6)
+- **container-edges**: the content of section 1 runs 40px from the left and 40px from the right (read from its outermost blocks: no .wrap): the margin is 64-120px at 1440px (one container, equal margins, 2px either way) (SR-6)
+- **container-edges**: "Main menu" runs 1394-1422px, outside the container lines of the nav at 40-1400px: full width is for background layers and grounds only (SR-6)
+- **container-edges**: 6 text blocks start on a left line at x 82, 42px from the container's left: text starts on the container's left, or on one split line (x 617, 732, 847) (also "CC recipients (optional)", "CC recipients (optional)", "BCC recipients (optional)") (SR-6)
+- **container-edges**: 3 text blocks start on a left line at x 65, 25px from the container's left: text starts on the container's left, or on one split line (x 617, 732, 847) (also "Disconnected", "Last discovery result. Each batc") (SR-6)
+- **row-lines**: a row of 3 items: its first item starts at 65px, the container's left line at 40px; its last item ends at 1375px, the container's right line at 1400px (2px either way) (SR-7)
+- **row-lines**: a row item is cut by a frame round it: 328 x 103px of its 328 x 126px shows (SR-7)
+- **row-lines**: a row item is cut by a frame round it: 328 x 103px of its 328 x 126px shows (SR-7)
+- **row-lines**: a row item is cut by a frame round it: 328 x 103px of its 328 x 126px shows (and 1 more like it: "FailedFailed0") (SR-7)
+- **container**: no .wrap
+
+## Current WARN categories
+
+a11y-name, action-repeat, assumed, body-size, copy-buttons, copy-exclaim, copy-length, copy-stat-strip, field-label, focus-hidden, focus-ring, focus-visible, fold-action, form-fields, form-send, heading-order, img-alt, lang, map-link, menu-toggle, open-now, page-meta, photo-credit, progress-bar, run-on, share-meta, skip-link, stagger, tabindex, tap-size
+
+---
+
+The following is the historical review from the previous indigo styling pass.
+
 GATE: FAIL 31 (round 1 of 3; cached Streamlit-shell result, not a current pass)
 
 # Dashboard design verification
