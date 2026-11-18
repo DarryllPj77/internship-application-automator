@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Target companies</title>
+<style>
+@font-face {font-family:'Inter';font-style:normal;font-weight:400 700;font-display:swap;src:url('/app/static/fonts/inter-latin.woff2') format('woff2')}
+@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url('/app/static/fonts/jetbrains-mono-latin.woff2') format('woff2')}
+:root {color-scheme:light;--canvas:#F8FAFC;--surface:#FFFFFF;--border:#E2E8F0;--ink:#0F172A;--muted:#475569;--accent:#4F46E5;--ease:cubic-bezier(.2,.8,.2,1);--mono:'JetBrains Mono',ui-monospace,monospace}
+* {box-sizing:border-box} body {margin:0;background:var(--surface);color:var(--ink);font:13px/1.5 Inter,system-ui,sans-serif}
+button,input,select {font:inherit} button {background:var(--surface);color:var(--ink);border:1px solid var(--border);border-radius:8px;min-height:36px;padding:7px 12px;cursor:pointer;transition:background-color 150ms var(--ease),transform 150ms var(--ease)}
+button:hover:not(:disabled) {background:var(--canvas)} button:active:not(:disabled) {transform:scale(.99)} button:disabled {opacity:.45;cursor:default}
+input,select {background:var(--surface);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:8px 10px;min-height:36px;max-width:100%}
+input::placeholder {color:var(--muted)} :focus-visible {outline:2px solid rgb(79 70 229 / .3);outline-offset:2px}
+.toolbar {display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}
+.search {width:min(100%,300px)} .count,.pagination {font:12px/1.6 var(--mono);font-variant-numeric:tabular-nums;color:var(--muted)}
+.table-scroll {overflow-x:auto;border:1px solid var(--border);border-radius:8px;scrollbar-width:thin}
+table {border-collapse:separate;border-spacing:0;width:100%;text-align:left;table-layout:fixed;min-width:700px}
+th {background:var(--canvas);color:var(--muted);font-size:11px;font-weight:500;padding:11px 10px;border-bottom:1px solid var(--border)}
+td {padding:10px 8px;border-bottom:1px solid var(--border);height:68px;vertical-align:middle}
+tr:last-child td {border-bottom:0} tbody tr {background:var(--surface);transition:background-color 150ms var(--ease)}
+tbody tr:hover {background:#F8FAFC} tbody tr.selected {background:rgb(238 242 255 / .6)}
+tbody tr td:first-child {border-left:2px solid transparent} tbody tr.selected td:first-child {border-left-color:var(--accent)}
+.check-col {width:42px;text-align:center}.company-col {width:26%}.recipient-col {width:27%}.contact-col {width:20%}.status-col {width:110px}
+input[type=checkbox] {appearance:auto;accent-color:var(--accent);width:16px;height:16px;min-height:16px;margin:0;cursor:pointer}
+.check-target {display:grid;place-items:center;min-width:28px;min-height:40px;cursor:pointer}
+.cell-input {display:block;border:1px solid transparent;background:transparent;border-radius:4px;padding:3px 4px;min-height:26px;width:100%;font-size:12px;color:var(--muted);text-overflow:ellipsis}
+.cell-input:hover:not(:disabled) {border-color:var(--border);background:var(--surface)}
+.cell-input:focus {background:var(--surface);border-color:var(--accent);outline:2px solid rgb(79 70 229 / .3);outline-offset:0;text-overflow:clip}
+.company-name {font-size:13px;color:var(--ink);font-weight:600}.email {font:11px/1.7 var(--mono)}
+.skills {font-size:11px}.pill {display:inline-flex;gap:6px;align-items:center;border:1px solid;border-radius:999px;padding:3px 8px;font-size:11px;white-space:nowrap}
+.dot {width:5px;height:5px;border-radius:50%;background:currentColor}
+.pending {background:#F1F5F9;color:#334155;border-color:#E2E8F0}.drafted {background:#EEF2FF;color:#4338CA;border-color:#C7D2FE}
+.sent {background:#ECFDF5;color:#047857;border-color:#A7F3D0}.failed {background:#FFF1F2;color:#BE123C;border-color:#FECDD3}
+.review {display:block;font-size:10px;color:#BE123C;margin-top:4px}.empty {padding:32px;text-align:center;color:var(--muted)}
+.footer {display:flex;justify-content:space-between;align-items:center;gap:12px;padding-top:16px}.pagination {display:flex;gap:8px;align-items:center}.pagination select {font-size:12px;padding:6px}
+@media(max-width:480px) {.toolbar {align-items:stretch;flex-direction:column}.search {width:100%}.footer {align-items:flex-start;flex-direction:column}.pagination {flex-wrap:wrap}button,select,.search,.check-target {min-height:44px}.cell-input {min-height:36px} }
+@media(prefers-reduced-motion:reduce) {* {transition:none!important}button:active {transform:none!important}}
+</style>
+</head>
+<body>
+<div class="toolbar"><input class="search" id="search" type="search" placeholder="Search companies or email…" aria-label="Search companies"><span class="count" id="selection" aria-live="polite"></span></div>
+<div class="table-scroll" tabindex="0" aria-label="Editable companies table; scroll horizontally for more columns">
+<table aria-label="Target companies"><thead><tr>
+<th class="check-col"><label class="check-target"><input type="checkbox" id="select-page" aria-label="Select visible companies"></label></th>
+<th class="company-col">Company / relevant skills</th><th class="recipient-col">HR email</th><th class="contact-col">Contact person</th><th class="status-col">Status</th>
+</tr></thead><tbody id="rows"></tbody></table>
+</div>
+<div class="footer"><span class="count" id="range" aria-live="polite"></span><div class="pagination"><label for="page-size">Rows</label><select id="page-size"><option>10</option><option>20</option><option>50</option></select><button id="previous" aria-label="Previous page">←</button><button id="next" aria-label="Next page">→</button></div></div>
+<script>
+// Streamlit's component protocol. Messages are accepted only from this frame's parent.
+const post = (type, extra={}) => window.parent.postMessage({isStreamlitMessage:true,type,...extra}, '*');
+let rows=[], selected=new Set(), revision='', disabled=false, page=0, pageSize=10, signature='', frameHeight=0;
+const $ = id => document.getElementById(id);
+const emit = () => post('streamlit:setComponentValue', {dataType:'json',value:{revision,rows,selected_ids:[...selected]}});
+function resizeFrame() {
+  const height=Math.ceil(document.body.getBoundingClientRect().height)+2;
+  if(height!==frameHeight) {frameHeight=height;post('streamlit:setFrameHeight',{height})}
+}
+function cellInput(row,field,className) {
+  const input=document.createElement('input'); input.value=row[field]; input.className='cell-input '+className;
+  input.setAttribute('aria-label', field.replaceAll('_',' ')+' for '+row.company_name); input.title=row[field];
+  input.disabled=disabled; input.spellcheck=false;
+  if(field==='hr_email') input.type='email';
+  input.addEventListener('change',()=>{row[field]=input.value;emit()});
+  return input;
+}
+function paint() {
+  const query=$('search').value.toLocaleLowerCase().trim();
+  const filtered=rows.filter(r=>[r.company_name,r.hr_email,r.contact_person,r.relevant_skills].some(v=>v.toLocaleLowerCase().includes(query)));
+  page=Math.min(page,Math.max(0,Math.ceil(filtered.length/pageSize)-1));
+  const visible=filtered.slice(page*pageSize,(page+1)*pageSize), body=$('rows'); body.replaceChildren();
+  visible.forEach(row=>{
+    const tr=document.createElement('tr');tr.classList.toggle('selected',selected.has(row.id));
+    const checkCell=document.createElement('td'), label=document.createElement('label'), check=document.createElement('input');
+    label.className='check-target';checkCell.className='check-col';check.type='checkbox';check.checked=selected.has(row.id);check.disabled=disabled;
+    check.setAttribute('aria-label','Select '+row.company_name);
+    check.addEventListener('change',()=>{check.checked?selected.add(row.id):selected.delete(row.id);tr.classList.toggle('selected',check.checked);updateSelection(visible);emit()});
+    label.append(check);checkCell.append(label);tr.append(checkCell);
+    const companyCell=document.createElement('td');companyCell.append(cellInput(row,'company_name','company-name'),cellInput(row,'relevant_skills','skills'));tr.append(companyCell);
+    for(const [field,style] of [['hr_email','email'],['contact_person','contact']]) {const td=document.createElement('td');td.append(cellInput(row,field,style));tr.append(td)}
+    const state=document.createElement('td'),pill=document.createElement('span'),dot=document.createElement('span');
+    const status=['pending','drafted','sent','failed'].includes(row.status)?row.status:'pending';
+    pill.className='pill '+status;dot.className='dot';dot.setAttribute('aria-hidden','true');pill.append(dot,document.createTextNode(status[0].toUpperCase()+status.slice(1)));state.append(pill);
+    if(row.needs_review) {const review=document.createElement('span');review.className='review';review.textContent='Review in Gmail';state.append(review)}
+    tr.append(state);body.append(tr);
+  });
+  if(!visible.length) {const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=5;td.className='empty';td.textContent=rows.length?'No companies match your search.':'Add a company to start your application list.';tr.append(td);body.append(tr)}
+  $('range').textContent=filtered.length?`${page*pageSize+1}–${Math.min((page+1)*pageSize,filtered.length)} of ${filtered.length}`:'0 companies';
+  $('previous').disabled=page===0;$('next').disabled=(page+1)*pageSize>=filtered.length;
+  updateSelection(visible);requestAnimationFrame(resizeFrame);
+}
+function updateSelection(visible) {
+  $('selection').textContent=`${selected.size} selected`;
+  const checked=visible.filter(r=>selected.has(r.id)).length;
+  $('select-page').checked=visible.length>0&&checked===visible.length;$('select-page').indeterminate=checked>0&&checked<visible.length;
+  $('select-page').disabled=disabled||!visible.length;
+}
+$('select-page').addEventListener('change',()=>{
+  const query=$('search').value.toLocaleLowerCase().trim();
+  const visible=rows.filter(r=>[r.company_name,r.hr_email,r.contact_person,r.relevant_skills].some(v=>v.toLocaleLowerCase().includes(query))).slice(page*pageSize,(page+1)*pageSize);
+  visible.forEach(row=>$('select-page').checked?selected.add(row.id):selected.delete(row.id));paint();emit();
+});
+$('search').addEventListener('input',()=>{page=0;paint()});$('page-size').addEventListener('change',()=>{pageSize=+$('page-size').value;page=0;paint()});
+$('previous').addEventListener('click',()=>{page--;paint()});$('next').addEventListener('click',()=>{page++;paint()});
+window.addEventListener('message',event=>{
+  if(event.source!==window.parent||event.data.type!=='streamlit:render')return;
+  const args=event.data.args, nextSignature=JSON.stringify([args.rows,args.selected_ids,args.disabled]);
+  if(signature===nextSignature)return;signature=nextSignature;
+  rows=args.rows;selected=new Set(args.selected_ids);revision=args.revision;disabled=args.disabled;paint();
+});
+window.addEventListener('resize',resizeFrame);
+document.fonts.ready.then(resizeFrame);
+post('streamlit:componentReady',{apiVersion:1});
+</script>
+</body>
+</html>

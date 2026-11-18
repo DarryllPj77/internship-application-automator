@@ -8,3 +8,4 @@ gcp-oauth.keys.json
 credentials.json
 .gmail-mcp/
 .streamlit/secrets.toml
+.taste-skill/

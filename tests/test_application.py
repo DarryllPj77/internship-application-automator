@@ -15,6 +15,7 @@ from streamlit.testing.v1 import AppTest
 from core import (CC, SUBJECT, Company, CompanyStore, atomic_text, email_payload,
                   exclusive_lock, import_companies, render_template, run_batch)
 from mcp_client import GmailConnection, GmailMCPClient
+from ui import preview_metadata, status_pill
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -184,6 +185,36 @@ class ApplicationTests(unittest.TestCase):
 
 
 class DashboardTests(unittest.TestCase):
+    def test_preview_metadata_escapes_user_content(self):
+        rendered = preview_metadata('<img src=x onerror=alert(1)>', CC, SUBJECT, 'CV.pdf')
+        self.assertNotIn('<img', rendered)
+        self.assertIn('&lt;img', rendered)
+        self.assertIn('email-subject', rendered)
+        self.assertIn('status-sent', status_pill('sent'))
+
+    def test_company_component_edit_and_selection_use_validated_storage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            company = Company(company_name="Original", hr_email="hr@acme.com",
+                              contact_person="HR", relevant_skills="Python")
+            store = CompanyStore(root / "companies.json")
+            store._write([company])
+            atomic_text(root / "template.txt", "Hello {company_name}")
+            code = (ROOT / "app.py").read_text(encoding="utf-8").replace(
+                "ROOT = Path(__file__).resolve().parent", f"ROOT = Path({str(root)!r})")
+            event = {"rows": [{**company.model_dump(), "company_name": "Edited"}], "selected_ids": [company.id]}
+            with patch('ui.company_table', return_value=event):
+                app = AppTest.from_string(code, default_timeout=30).run()
+            self.assertFalse(app.exception)
+            self.assertEqual(store.load()[0].company_name, "Edited")
+            self.assertEqual(app.session_state["selected_ids"], [company.id])
+            event["rows"][0]["hr_email"] = "invalid-address"
+            with patch('ui.company_table', return_value=event):
+                app.run()
+            self.assertFalse(app.exception)
+            self.assertTrue(any('Edits not saved' in error.value for error in app.error))
+            self.assertEqual(store.load()[0].hr_email, "hr@acme.com")
+
     def test_confirmed_draft_batch_through_dashboard_offline(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

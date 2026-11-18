@@ -166,6 +166,10 @@ contains application contacts and results; review it before committing.
 | `app.py` | Four dashboard sections, confirmation, orchestration, streaming events |
 | `core.py` | Models, rendering, CV validation, atomic persistence/import, batch runner |
 | `mcp_client.py` | Async stdio lifecycle, paginated discovery, schema checks, tool calls |
+| `ui.py`, `ui/` | Presentation helpers, dashboard tokens, accessible editable company table |
+| `static/fonts/` | Locally served Inter and JetBrains Mono fonts with OFL licenses |
+| `DESIGN.md` | Dashboard layout, typography, color, and interaction decisions |
+| `DESIGN_REVIEW.md` | Verification results, checker limitations, and open findings |
 | `companies.json` | Local company records, delivery states, recovery metadata |
 | `template.txt` | Editable applicant-specific plain-text template |
 | `tests/` | Offline guardrail, persistence, batch, UI, and stdio integration tests |
@@ -174,4 +178,12 @@ Run tests without Gmail credentials or any real email calls:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+node --test tests/company_table.test.cjs
 ```
+
+The light theme uses the specified indigo/slate tokens and four semantic status
+palettes. Company fields save on blur or Enter; the table supports search, page
+sizes, and selecting the visible page. Selections are retained across searches
+and pages. Template and Email preview tabs share one writing panel. Reduced-motion
+preferences disable animation. Fonts are bundled locally; no font-service network
+request is needed. Restart Streamlit after changing its server/static-file settings.
