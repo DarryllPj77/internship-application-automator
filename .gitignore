@@ -9,3 +9,4 @@ credentials.json
 .gmail-mcp/
 .streamlit/secrets.toml
 .taste-skill/
+email_settings.json

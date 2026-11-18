@@ -30,11 +30,12 @@ def company_table(companies, selected_ids, *, disabled=False, key="company_table
     return event if event and event.get("revision") == revision else None
 
 
-def preview_metadata(recipient: str, cc: str, subject: str, filename: str) -> str:
+def preview_metadata(recipient: str, subject: str, filename: str, *, cc=(), bcc=()) -> str:
     return '<div class="email-envelope">' + "".join(
         f'<div class="envelope-row"><span class="envelope-label">{label}</span>'
         f'<span class="{style}">{html.escape(value)}</span></div>'
-        for label, value, style in (("To", recipient, "mono"), ("Cc", cc, "mono"),
+        for label, value, style in (("To", recipient, "mono"), ("Cc", ", ".join(cc) or "None", "mono"),
+                                    ("Bcc", ", ".join(bcc) or "None", "mono"),
                                     ("Subject", subject, "email-subject"),
                                     ("Attachment", filename, "mono"))
     ) + '</div>'

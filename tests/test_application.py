@@ -12,8 +12,9 @@ from unittest.mock import AsyncMock, patch
 from mcp.types import CallToolResult, TextContent
 from streamlit.testing.v1 import AppTest
 
-from core import (CC, SUBJECT, Company, CompanyStore, atomic_text, email_payload,
-                  exclusive_lock, import_companies, render_template, run_batch)
+from core import (SUBJECT, Company, CompanyStore, EmailSettings, atomic_text, email_payload,
+                  exclusive_lock, import_companies, render_template, run_batch,
+                  load_email_settings, save_email_settings)
 from mcp_client import GmailConnection, GmailMCPClient
 from ui import preview_metadata, status_pill
 
@@ -37,7 +38,8 @@ class ApplicationTests(unittest.TestCase):
 
     def test_fixed_payload_and_absolute_cv(self):
         payload = self.payload()
-        self.assertEqual(payload["cc"], [CC])
+        self.assertEqual(payload["cc"], [])
+        self.assertNotIn("bcc", payload)
         self.assertEqual(payload["subject"], SUBJECT)
         self.assertEqual(payload["attachments"], [str(self.pdf.resolve())])
         self.assertEqual(payload["body"], "Dear Hiring Team, Acme: Python")
@@ -123,6 +125,72 @@ class ApplicationTests(unittest.TestCase):
             asyncio.run(GmailConnection(session, [tool]).deliver("draft", self.payload()))
         self.assertEqual(session.call_tool.call_args.args[0], "draft_email")
 
+    def test_transport_validates_optional_copies_for_drafts_and_sends(self):
+        schema = {"type": "object", "properties": {key: {} for key in self.payload()}}
+        schema["properties"]["bcc"] = {"type": "array", "items": {"type": "string"}}
+        tools = [SimpleNamespace(name=name, inputSchema=schema) for name in ("draft_email", "send_email")]
+        session = SimpleNamespace(call_tool=AsyncMock(return_value=CallToolResult(
+            content=[TextContent(type="text", text="offline success")])))
+        connection = GmailConnection(session, tools)
+        for mode in ("draft", "send"):
+            for field in ("cc", "bcc"):
+                with self.subTest(mode=mode, field=field), self.assertRaises(ValueError):
+                    asyncio.run(connection.deliver(mode, {**self.payload(), field: ["invalid-address"]}))
+        session.call_tool.assert_not_awaited()
+        for mode, name in (("draft", "draft_email"), ("send", "send_email")):
+            payload = {**self.payload(), "cc": ["copy@example.com"], "bcc": ["private@example.com"]}
+            asyncio.run(connection.deliver(mode, payload))
+            self.assertEqual(session.call_tool.call_args.args[0], name)
+            self.assertEqual(session.call_tool.call_args.kwargs["arguments"]["cc"], ["copy@example.com"])
+            self.assertEqual(session.call_tool.call_args.kwargs["arguments"]["bcc"], ["private@example.com"])
+
+    def test_optional_copy_settings_validate_persist_and_clear(self):
+        path = self.root / "email_settings.json"
+        self.assertEqual(load_email_settings(path), EmailSettings())
+        settings = EmailSettings(cc="first@example.com; FIRST@example.com, second@example.com", bcc="private@example.com")
+        self.assertEqual(settings.cc, ["first@example.com", "second@example.com"])
+        save_email_settings(path, settings)
+        self.assertEqual(load_email_settings(path), settings)
+        save_email_settings(path, EmailSettings(cc="", bcc=""))
+        self.assertEqual(load_email_settings(path), EmailSettings())
+        for invalid in ("invalid", "a@example.com\nBcc: attacker@example.com"):
+            with self.assertRaises(ValueError):
+                EmailSettings(cc=invalid)
+        with self.assertRaises(ValueError):
+            EmailSettings(cc="same@example.com", bcc="SAME@example.com")
+
+    def test_unsupported_copy_field_is_blocked_before_tool_call(self):
+        tool = SimpleNamespace(name="send_email", inputSchema={"properties": {key: {} for key in self.payload()}})
+        session = SimpleNamespace(call_tool=AsyncMock())
+        with self.assertRaisesRegex(ValueError, "does not support BCC"):
+            asyncio.run(GmailConnection(session, [tool]).deliver("send", {**self.payload(), "bcc": ["private@example.com"]}))
+        session.call_tool.assert_not_awaited()
+
+    def test_batch_automatically_reuses_confirmed_copies_for_each_company(self):
+        second = self.company.model_copy(update={"id": "second", "hr_email": "other@acme.com"})
+        calls = []
+        class FakeClient:
+            @asynccontextmanager
+            async def connect(self):
+                yield self
+            def require_tool(self, mode):
+                return SimpleNamespace(name=mode + "_email")
+            async def deliver(self, mode, payload):
+                calls.append((mode, payload))
+                return "offline-id"
+        settings_path = self.root / "email_settings.json"
+        confirmed = EmailSettings(cc="review@example.com", bcc="private@example.com")
+        save_email_settings(settings_path, EmailSettings(cc="future@example.com"))
+        for mode in ("draft", "send"):
+            self.store._write([self.company, second])
+            asyncio.run(run_batch(self.store, FakeClient(), [self.company, second], "Hi", str(self.pdf), mode,
+                lambda *args: None, AsyncMock(), cc=confirmed.cc, bcc=confirmed.bcc))
+        self.assertEqual(len(calls), 4)
+        for mode, payload in calls:
+            self.assertEqual(payload["cc"], ["review@example.com"])
+            self.assertEqual(payload["bcc"], ["private@example.com"])
+        self.assertEqual(load_email_settings(settings_path).cc, ["future@example.com"])
+
     def test_batch_delays_and_persists_success(self):
         second = self.company.model_copy(update={"id": "second", "hr_email": "other@acme.com"})
         self.store._write([self.company, second])
@@ -186,10 +254,13 @@ class ApplicationTests(unittest.TestCase):
 
 class DashboardTests(unittest.TestCase):
     def test_preview_metadata_escapes_user_content(self):
-        rendered = preview_metadata('<img src=x onerror=alert(1)>', CC, SUBJECT, 'CV.pdf')
+        rendered = preview_metadata('<img src=x onerror=alert(1)>', SUBJECT, 'CV.pdf')
         self.assertNotIn('<img', rendered)
         self.assertIn('&lt;img', rendered)
         self.assertIn('email-subject', rendered)
+        self.assertIn('Cc', rendered)
+        self.assertIn('Bcc', rendered)
+        self.assertIn('None', rendered)
         self.assertIn('status-sent', status_pill('sent'))
 
     def test_company_component_edit_and_selection_use_validated_storage(self):
@@ -234,15 +305,21 @@ class DashboardTests(unittest.TestCase):
                 app.session_state["selected_ids"] = [company.id]
                 app.run()
                 self.assertFalse(app.exception)
+                next(t for t in app.text_input if t.label == "CC recipients (optional)").set_value("copy@example.com").run()
+                next(t for t in app.text_input if t.label == "BCC recipients (optional)").set_value("private@example.com").run()
+                self.assertEqual(load_email_settings(root / "email_settings.json").cc, ["copy@example.com"])
                 def button(label):
                     return next(b for b in app.button if b.label == label)
                 button("Create Drafts for Selected (1)").click().run()
                 self.assertFalse(app.exception)
+                self.assertTrue(any("copy@example.com" in text.value and "private@example.com" in text.value for text in app.text))
                 self.assertTrue(button("Confirm and start").disabled)
                 app.checkbox[0].check().run()
                 button("Confirm and start").click().run()
                 self.assertFalse(app.exception)
                 self.assertEqual(store.load()[0].status, "drafted")
+                self.assertIn("copy@example.com", store.load()[0].last_result)
+                self.assertIn("private@example.com", store.load()[0].last_result)
                 self.assertFalse(store.load()[0].needs_review)
                 self.assertEqual(app.session_state["selected_ids"], [])
 

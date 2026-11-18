@@ -14,13 +14,60 @@ from pathlib import Path
 from typing import Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SUBJECT = "FEU TECH - DARRYLL PAJAGANAS - Internship Application - BSCSSE - 2TSY2627 - Internship 1"
-CC = "sc_ialap@feutech.edu.ph"
 FIELDS = ("company_name", "hr_email", "contact_person", "relevant_skills")
 PLACEHOLDER = re.compile(r"\{[^{}]*\}")
 EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
+
+
+def parse_recipients(value) -> list[str]:
+    """Accept plain addresses separated by commas, semicolons or newlines."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = re.split(r"[,;\n]", value)
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError("Recipients must be email addresses")
+    result, seen = [], set()
+    for item in value:
+        address = item.strip()
+        if not address:
+            continue
+        if not EMAIL.fullmatch(address):
+            raise ValueError(f"Invalid copy recipient: {address!r}")
+        if address.casefold() not in seen:
+            result.append(address)
+            seen.add(address.casefold())
+    if len(result) > 50:
+        raise ValueError("Use at most 50 addresses per copy field")
+    return result
+
+
+class EmailSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
+
+    @field_validator("cc", "bcc", mode="before")
+    @classmethod
+    def valid_recipients(cls, value):
+        return parse_recipients(value)
+
+    @model_validator(mode="after")
+    def distinct_copy_fields(self):
+        if {a.casefold() for a in self.cc} & {a.casefold() for a in self.bcc}:
+            raise ValueError("An address cannot appear in both CC and BCC")
+        return self
+
+
+def load_email_settings(path: Path) -> EmailSettings:
+    return EmailSettings.model_validate_json(path.read_text(encoding="utf-8")) if path.exists() else EmailSettings()
+
+
+def save_email_settings(path: Path, settings: EmailSettings):
+    atomic_text(path, settings.model_dump_json(indent=2) + "\n")
 
 
 class Company(BaseModel):
@@ -75,7 +122,7 @@ def render_template(template: str, company: Company) -> str:
     )
 
 
-def email_payload(company: Company, template: str, cv_path: str) -> dict:
+def email_payload(company: Company, template: str, cv_path: str, *, cc=None, bcc=None) -> dict:
     company = Company.model_validate(company.model_dump())
     path = validate_pdf(cv_path)
     body = render_template(template, company)
@@ -85,8 +132,12 @@ def email_payload(company: Company, template: str, cv_path: str) -> dict:
         raise ValueError("Resolve all {placeholders} and stray braces before continuing")
     if company.hr_email.lower().endswith((".example", ".invalid", ".test")):
         raise ValueError("Replace the sample/reserved HR email with a real recipient")
-    return {"to": [company.hr_email], "cc": [CC], "subject": SUBJECT,
-            "body": body, "attachments": [str(path)]}
+    settings = EmailSettings(cc=cc, bcc=bcc)
+    payload = {"to": [company.hr_email], "cc": settings.cc, "subject": SUBJECT,
+               "body": body, "attachments": [str(path)]}
+    if settings.bcc:
+        payload["bcc"] = settings.bcc
+    return payload
 
 
 @contextmanager
@@ -170,7 +221,7 @@ def import_companies(raw: bytes, filename: str, existing: list[Company]) -> list
     return result
 
 
-async def run_batch(store, client, companies, template, cv_path, mode, emit, sleep=asyncio.sleep):
+async def run_batch(store, client, companies, template, cv_path, mode, emit, sleep=asyncio.sleep, *, cc=None, bcc=None):
     """emit receives log/progress/countdown events; no automatic retry of mail calls."""
     if mode not in ("draft", "send"):
         raise ValueError("Unknown execution mode")
@@ -181,7 +232,7 @@ async def run_batch(store, client, companies, template, cv_path, mode, emit, sle
     if len({c.hr_email.casefold() for c in companies}) != len(companies):
         raise ValueError("Selected companies share an HR email; choose only one row per recipient")
     # Validate the entire reviewed snapshot before spawning a server or sending.
-    payloads = [email_payload(c, template, cv_path) for c in companies]
+    payloads = [email_payload(c, template, cv_path, cc=cc, bcc=bcc) for c in companies]
     with exclusive_lock(store.batch_lock):
         current = {c.id: c for c in store.load()}
         for company in companies:
@@ -191,6 +242,10 @@ async def run_batch(store, client, companies, template, cv_path, mode, emit, sle
                 raise ValueError(f"Review the previous uncertain outcome for {company.company_name}")
         async with client.connect() as connection:
             connection.require_tool(mode)
+            # Reject unsupported copy fields before any Gmail operation starts.
+            if hasattr(connection, "validate_payload"):
+                for payload in payloads:
+                    connection.validate_payload(mode, payload)
             emit("log", f"Connected · {mode} tool: {connection.require_tool(mode).name}")
             for index, (company, payload) in enumerate(zip(companies, payloads)):
                 # Durable marker BEFORE calling Gmail survives app/process interruption.

@@ -10,9 +10,9 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
-from core import (CC, SUBJECT, FIELDS, PLACEHOLDER, Company, CompanyStore,
+from core import (SUBJECT, FIELDS, PLACEHOLDER, Company, CompanyStore, EmailSettings,
                   atomic_text, email_payload, import_companies, render_template,
-                  run_batch, validate_pdf)
+                  run_batch, validate_pdf, load_email_settings, save_email_settings)
 from mcp_client import GmailMCPClient
 from ui import company_table, preview_metadata, status_pill, stylesheet
 
@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 STORE = CompanyStore(ROOT / "companies.json")
 TEMPLATE = ROOT / "template.txt"
+EMAIL_SETTINGS = ROOT / "email_settings.json"
 
 st.set_page_config(page_title="Internship Desk · Darryll Pajaganas", page_icon=":material/mail:", layout="wide")
 st.markdown(stylesheet(), unsafe_allow_html=True)
@@ -44,7 +45,9 @@ def dismiss_confirmation():
 def confirm_batch(job):
     verb = "Send emails" if job["mode"] == "send" else "Create Gmail drafts"
     st.write(f"**{verb} for {len(job['companies'])} selected companies?**")
-    st.caption(f"CC on every email: {CC}")
+    st.text("CC: " + (", ".join(job.get("cc", [])) or "None") +
+            "\nBCC: " + (", ".join(job.get("bcc", [])) or "None"))
+    st.caption("These copy recipients apply to every email in this batch. BCC is hidden from other recipients.")
     st.write(f"Attachment: **{Path(job['cv_path']).name}**")
     st.write("Subject: " + SUBJECT)
     st.dataframe([{"Company": c.company_name, "To": c.hr_email, "Current status": c.status.title()}
@@ -55,7 +58,7 @@ def confirm_batch(job):
         for company in job["companies"]:
             st.markdown(f"**{company.company_name}**")
             st.text(render_template(job["template"], company))
-    acknowledged = st.checkbox("I reviewed these recipients, bodies, CC, attachment, and the Gmail account used during OAuth.")
+    acknowledged = st.checkbox("I reviewed To, CC, BCC, bodies, attachment, and the Gmail account used during OAuth.")
     if job["mode"] == "send":
         st.warning("Send Mode delivers immediately. Sent emails cannot be recalled here.")
     if st.button("Confirm and start", type="primary", disabled=not acknowledged):
@@ -77,6 +80,11 @@ def main():
         st.error(f"Cannot load companies.json: {exc}. Fix the file before continuing.")
         st.stop()
     job_running = "pending_job" in st.session_state
+    try:
+        saved_email_settings = load_email_settings(EMAIL_SETTINGS)
+    except (ValueError, OSError) as exc:
+        st.error(f"Cannot load email_settings.json: {exc}. Fix the settings file before continuing.")
+        st.stop()
     with st.container(key="configuration_panel"):
         connection_col, path_col, mode_col = st.columns([1.1, 2, 1.4], gap="small")
         with connection_col:
@@ -117,6 +125,25 @@ def main():
             else:
                 st.markdown(status_pill("drafted", "Draft Mode"), unsafe_allow_html=True)
                 st.caption("Creates Gmail drafts for your review. Nothing is sent.")
+        with st.expander("Optional CC / BCC recipients", expanded=bool(saved_email_settings.cc or saved_email_settings.bcc)):
+            st.caption("Applied automatically to every draft or send in a confirmed batch. Leave a field blank to remove its recipients. Separate addresses with commas or semicolons.")
+            if "copy_cc" not in st.session_state:
+                st.session_state.copy_cc = ", ".join(saved_email_settings.cc)
+                st.session_state.copy_bcc = ", ".join(saved_email_settings.bcc)
+            cc_text = st.text_input("CC recipients (optional)", key="copy_cc", disabled=job_running,
+                                    placeholder="coordinator@example.com, recruiter@example.com")
+            bcc_text = st.text_input("BCC recipients (optional)", key="copy_bcc", disabled=job_running,
+                                     placeholder="Your private copy address, or leave blank")
+            copies_valid = True
+            try:
+                copy_settings = EmailSettings(cc=cc_text, bcc=bcc_text)
+                if copy_settings != saved_email_settings and not job_running:
+                    save_email_settings(EMAIL_SETTINGS, copy_settings)
+                st.caption("Copy settings saved locally. They do not change existing Gmail drafts.")
+            except (ValueError, OSError) as exc:
+                copies_valid = False
+                copy_settings = EmailSettings()
+                st.error(f"Copy settings not saved. Fix CC / BCC before running a batch: {exc}")
     counters = st.columns(4)
     for column, status in zip(counters, ("pending", "drafted", "sent", "failed")):
         column.metric(status.title(), sum(c.status == status for c in companies))
@@ -221,7 +248,11 @@ def main():
                 if companies:
                     preview = st.selectbox("Preview company", companies, format_func=lambda c: f"{c.company_name} · {c.hr_email}")
                     body = render_template(template, preview)
-                    st.markdown(preview_metadata(preview.hr_email, CC, SUBJECT, Path(cv_path).name if cv_path else "No PDF selected"), unsafe_allow_html=True)
+                    if copies_valid:
+                        st.markdown(preview_metadata(preview.hr_email, SUBJECT, Path(cv_path).name if cv_path else "No PDF selected",
+                                                     cc=copy_settings.cc, bcc=copy_settings.bcc), unsafe_allow_html=True)
+                    else:
+                        st.error("Fix the CC / BCC fields to preview the complete recipient list.")
                     highlighted = PLACEHOLDER.sub(lambda m: '<span class="missing">' + m.group() + '</span>', html.escape(body))
                     st.markdown('<div class="email-body">' + highlighted.replace("\n", "<br>") + '</div>', unsafe_allow_html=True)
                     if "{" in body or "}" in body:
@@ -232,13 +263,14 @@ def main():
     with st.container(key="batch_panel"):
         st.header("Batch activity", anchor=False)
         action = f"Send Emails to Selected ({len(selected)})" if sending else f"Create Drafts for Selected ({len(selected)})"
-        if st.button(action, type="primary", disabled=not selected or not pdf_valid or job_running):
+        if st.button(action, type="primary", disabled=not selected or not pdf_valid or not copies_valid or job_running):
             try:
                 for company in selected:
-                    email_payload(company, template, cv_path)
+                    email_payload(company, template, cv_path, cc=copy_settings.cc, bcc=copy_settings.bcc)
                     if company.needs_review:
                         raise ValueError(f"Reconcile {company.company_name} before retrying")
-                st.session_state.confirmation_job = {"companies": selected, "template": template, "cv_path": cv_path, "mode": mode}
+                st.session_state.confirmation_job = {"companies": selected, "template": template, "cv_path": cv_path, "mode": mode,
+                                                     "cc": list(copy_settings.cc), "bcc": list(copy_settings.bcc)}
             except Exception as exc:
                 st.error(str(exc))
         if "confirmation_job" in st.session_state:
@@ -271,7 +303,7 @@ def main():
         if logs:
             st.download_button("Download activity log", "\n".join(logs), file_name="internship-activity.txt", mime="text/plain")
     st.markdown('<div class="workspace-footer"><span>Local workspace · Drafts by default</span>'
-                '<span>School CC included · Every batch reviewed</span></div>', unsafe_allow_html=True)
+                '<span>Optional copies · Every batch reviewed</span></div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":

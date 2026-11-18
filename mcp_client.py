@@ -12,7 +12,7 @@ from jsonschema import Draft202012Validator
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from core import CC, SUBJECT, EMAIL, validate_pdf
+from core import SUBJECT, EMAIL, EmailSettings, validate_pdf
 
 
 class GmailConnection:
@@ -34,11 +34,14 @@ class GmailConnection:
                 return tool
         raise ValueError(f"No {mode} tool available. Discovered: {', '.join(self.tools)}")
 
-    async def deliver(self, mode, payload):
+    def validate_payload(self, mode, payload):
         tool = self.require_tool(mode)
-        # Validate again at the transport boundary, including fixed CC/subject.
-        if payload.get("cc") != [CC] or payload.get("subject") != SUBJECT:
-            raise ValueError("Mandatory CC or subject changed")
+        settings = EmailSettings(cc=payload.get("cc"), bcc=payload.get("bcc"))
+        for field, recipients in (("cc", settings.cc), ("bcc", settings.bcc)):
+            if recipients and field not in tool.inputSchema.get("properties", {}):
+                raise ValueError(f"{tool.name} does not support {field.upper()} recipients")
+        if payload.get("subject") != SUBJECT:
+            raise ValueError("Fixed subject changed")
         recipients = payload.get("to", [])
         if len(recipients) != 1 or not EMAIL.fullmatch(recipients[0]):
             raise ValueError("Exactly one valid HR recipient is required")
@@ -48,6 +51,10 @@ class GmailConnection:
             raise ValueError("Exactly one PDF CV is required")
         validate_pdf(payload["attachments"][0])
         Draft202012Validator(tool.inputSchema).validate(payload)
+        return tool
+
+    async def deliver(self, mode, payload):
+        tool = self.validate_payload(mode, payload)
         result = await self.session.call_tool(tool.name, arguments=payload)
         content = [block.model_dump(mode="json") for block in result.content]
         summary = json.dumps({"content": content, "structuredContent": result.structuredContent}, ensure_ascii=False)

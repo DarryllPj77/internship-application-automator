@@ -63,7 +63,7 @@ Setup references: [Gmail MCP upstream setup](https://github.com/GongRzhe/Gmail-M
 [Enable Google Workspace APIs](https://developers.google.com/workspace/guides/enable-apis),
 [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk).
 The upstream repository is archived; runtime schema checks reject tools without
-the necessary attachment/CC fields. `MCP_SERVER_ARGS` can select a specific reviewed
+the necessary attachment and email fields. `MCP_SERVER_ARGS` can select a specific reviewed
 package version or another compatible local stdio server. The default follows
 the requested `npx -y @gongrzhe/server-gmail-autoauth-mcp` invocation.
 
@@ -82,7 +82,20 @@ To retain a new path after restarting, edit `.env`. A valid file must exist, hav
 a `.pdf` extension, and start with a PDF signature. This checks the file type,
 not whether its pages contain a complete or correct CV.
 
-Mandatory CC: `sc_ialap@feutech.edu.ph`.
+CC and BCC are optional and empty by default. Expand **Optional CC / BCC
+recipients** to enter any email addresses, separated by commas or semicolons.
+Clear a field to remove its copy recipients. Valid edits save automatically to
+local, Git-ignored `email_settings.json` and load again in future sessions.
+Invalid addresses block execution, and duplicates within a field are removed
+case-insensitively. An address cannot appear in both CC and BCC.
+
+Saved copies apply automatically to **every** draft or email in a batch. Review
+them in Email preview and the confirmation dialog. Confirmation freezes these
+addresses for that batch; subsequent setting changes affect future batches.
+BCC is shown to you in the local preview/confirmation but hidden from other email
+recipients. The MCP server must advertise support for any populated copy field.
+No school address is automatically added. For a self-test, leave both fields empty.
+Previously created Gmail drafts and sent messages are not modified by these edits.
 
 Fixed subject:
 
@@ -171,6 +184,7 @@ contains application contacts and results; review it before committing.
 | `DESIGN.md` | Dashboard layout, typography, color, and interaction decisions |
 | `DESIGN_REVIEW.md` | Verification results, checker limitations, and open findings |
 | `companies.json` | Local company records, delivery states, recovery metadata |
+| `email_settings.json` | Optional local CC/BCC preferences, created on edit and ignored by Git |
 | `template.txt` | Editable applicant-specific plain-text template |
 | `tests/` | Offline guardrail, persistence, batch, UI, and stdio integration tests |
 
