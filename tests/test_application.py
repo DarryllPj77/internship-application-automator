@@ -399,10 +399,53 @@ class DashboardTests(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertEqual(app.toggle[0].value, False)
         self.assertEqual(len(app.metric), 4)
-        self.assertIn("Northstar", app.selectbox[0].value.company_name)
+        self.assertIn("Northstar", app.selectbox[0].options[0])
         app.selectbox[0].select_index(1).run()
         self.assertFalse(app.exception)
-        self.assertIn("Evergreen", app.selectbox[0].value.company_name)
+        self.assertTrue(any("internships@evergreen.example" in item.value for item in app.markdown))
+
+    def test_queue_edit_and_delete_update_live_preview_and_selection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = Company(company_name="First", hr_email="first@company.com", relevant_skills="SQL")
+            second = Company(company_name="Second", hr_email="second@company.com", relevant_skills="Python")
+            store = CompanyStore(root / "companies.json")
+            store._write([first, second])
+            atomic_text(root / "template.txt", "Hello {company_name}")
+            code = (ROOT / "app.py").read_text(encoding="utf-8").replace(
+                "ROOT = Path(__file__).resolve().parent", f"ROOT = Path({str(root)!r})")
+            app = AppTest.from_string(code, default_timeout=30)
+            app.session_state['preview_company_id'] = second.id
+            app.session_state['selected_ids'] = [second.id]
+            action = {"type": "edit", "nonce": "edit-once", "id": second.id,
+                      "changes": {"company_name": "Updated Second", "hr_email": "updated@company.com", "contact_person": "", "relevant_skills": "", "status": "drafted"}}
+            with patch('ui.company_table', return_value={"action": action}):
+                app.run()
+            self.assertFalse(app.exception)
+            self.assertEqual(app.session_state['preview_company_id'], second.id)
+            self.assertEqual(store.load()[1].status, "drafted")
+            self.assertTrue(any('updated@company.com' in item.value for item in app.markdown))
+            with patch('ui.company_table', return_value={"action": {"type": "delete", "nonce": "delete-once", "ids": [second.id]}}):
+                app.run()
+            self.assertFalse(app.exception)
+            self.assertEqual([c.id for c in store.load()], [first.id])
+            self.assertEqual(app.session_state['selected_ids'], [])
+            self.assertEqual(app.session_state['preview_company_id'], first.id)
+
+    def test_stale_queue_action_cannot_delete_a_company(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            company = Company(company_name="Protected", hr_email="hr@company.com")
+            store = CompanyStore(root / "companies.json")
+            store._write([company])
+            atomic_text(root / "template.txt", "Hello {company_name}")
+            code = (ROOT / "app.py").read_text(encoding="utf-8").replace(
+                "ROOT = Path(__file__).resolve().parent", f"ROOT = Path({str(root)!r})")
+            with patch('ui.company_table', return_value={"stale": True, "action": {"type": "delete", "nonce": "old", "ids": [company.id]}}):
+                app = AppTest.from_string(code, default_timeout=30).run()
+            self.assertFalse(app.exception)
+            self.assertTrue(any('queue changed' in error.value for error in app.error))
+            self.assertEqual(len(store.load()), 1)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,12 @@ FIELDS = ("company_name", "hr_email", "contact_person", "relevant_skills")
 PLACEHOLDER = re.compile(r"\{[^{}]*\}")
 EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
 MAX_CV_UPLOAD_BYTES = 20 * 1024 * 1024
+DEFAULT_CONTACT = "Hiring Team"
+DEFAULT_SKILLS = "software development"
+
+
+class QueueConflict(ValueError):
+    """A queue change cannot safely be applied to current storage."""
 
 
 def parse_recipients(value) -> list[str]:
@@ -77,11 +83,18 @@ class Company(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex, min_length=1)
     company_name: str
     hr_email: str
-    contact_person: str
-    relevant_skills: str
+    contact_person: str = DEFAULT_CONTACT
+    relevant_skills: str = DEFAULT_SKILLS
     status: Literal["pending", "drafted", "sent", "failed"] = "pending"
     needs_review: bool = False
     last_result: str = ""
+
+    @field_validator("contact_person", "relevant_skills", mode="before")
+    @classmethod
+    def default_blank_details(cls, value, info):
+        if value is None or isinstance(value, str) and not value.strip():
+            return DEFAULT_CONTACT if info.field_name == "contact_person" else DEFAULT_SKILLS
+        return value
 
     @field_validator("status", mode="before")
     @classmethod
@@ -102,6 +115,23 @@ class Company(BaseModel):
         if not EMAIL.fullmatch(value):
             raise ValueError("Enter one valid HR email address")
         return value
+
+
+class CompanyEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    company_name: str
+    hr_email: str
+    contact_person: str = DEFAULT_CONTACT
+    relevant_skills: str = DEFAULT_SKILLS
+    status: Literal["pending", "drafted", "sent", "failed"] = "pending"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_fields(cls, value):
+        if not isinstance(value, dict):
+            return value
+        normalized = Company.model_validate(value)
+        return {**value, **{field: getattr(normalized, field) for field in (*FIELDS, "status")}}
 
 
 def validate_pdf(value: str) -> Path:
@@ -222,12 +252,33 @@ class CompanyStore:
     def replace(self, companies: list[Company], expected: list[Company]):
         with exclusive_lock(self.path.with_suffix(".write.lock")):
             if self.batch_lock.exists():
-                raise ValueError("A batch is running. Company edits are temporarily locked.")
+                raise QueueConflict("A batch is running. Company edits are temporarily locked.")
             if self.load() != expected:
-                raise ValueError("Company data changed in another session. Reload before editing.")
+                raise QueueConflict("Company data changed in another session. Reload before editing.")
             if len({c.id for c in companies}) != len(companies):
                 raise ValueError("Company IDs must be unique")
             self._write(companies)
+
+    def edit_company(self, company_id: str, changes: CompanyEdit, *, expected=None):
+        original = self.load() if expected is None else expected
+        company = next((c for c in original if c.id == company_id), None)
+        if company is None:
+            raise KeyError("Company not found")
+        if company.needs_review and changes.status != company.status:
+            raise QueueConflict("Check Gmail and reconcile the uncertain outcome before changing this status")
+        replacement = Company.model_validate({**company.model_dump(), **changes.model_dump()})
+        updated = [replacement if c.id == company_id else c for c in original]
+        self.replace(updated, original)
+        return updated
+
+    def remove_companies(self, ids: list[str], *, strict=False, expected=None):
+        original = self.load() if expected is None else expected
+        requested = set(ids)
+        if strict and requested - {c.id for c in original}:
+            raise KeyError("Company not found")
+        updated = [c for c in original if c.id not in requested]
+        self.replace(updated, original)
+        return updated
 
     def update(self, company_id: str, **changes):
         with exclusive_lock(self.path.with_suffix(".write.lock")):
@@ -268,12 +319,14 @@ async def run_batch(store, client, companies, template, cv_path, mode, emit, sle
     # Validate the entire reviewed snapshot before spawning a server or sending.
     payloads = [email_payload(c, template, cv_path, cc=cc, bcc=bcc) for c in companies]
     with exclusive_lock(store.batch_lock):
-        current = {c.id: c for c in store.load()}
-        for company in companies:
-            if current.get(company.id) != company:
-                raise ValueError("Company data changed since confirmation; preview again")
-            if company.needs_review:
-                raise ValueError(f"Review the previous uncertain outcome for {company.company_name}")
+        # Synchronize startup with queue mutations already inside their write lock.
+        with exclusive_lock(store.path.with_suffix(".write.lock")):
+            current = {c.id: c for c in store.load()}
+            for company in companies:
+                if current.get(company.id) != company:
+                    raise ValueError("Company data changed since confirmation; preview again")
+                if company.needs_review:
+                    raise ValueError(f"Review the previous uncertain outcome for {company.company_name}")
         async with client.connect() as connection:
             connection.require_tool(mode)
             # Reject unsupported copy fields before any Gmail operation starts.

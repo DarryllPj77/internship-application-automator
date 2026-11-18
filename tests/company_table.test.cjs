@@ -4,28 +4,44 @@ const assert=require('node:assert/strict');
 const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
-const html=fs.readFileSync(path.join(__dirname,'../ui/company_table/index.html'),'utf8');
+const html=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');
 const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
-function setup() {
+function setup(standalone=false) {
   class Element {
     constructor(tag='div') {this.tag=tag;this.children=[];this.listeners={};this.value='';this.checked=false;this.disabled=false;this.classes=new Set();this.classList={toggle:(name,on)=>on?this.classes.add(name):this.classes.delete(name)}}
     append(...children) {this.children.push(...children)}
     replaceChildren(...children) {this.children=children}
     setAttribute(name,value) {this[name]=value}
     addEventListener(name,callback) {this.listeners[name]=callback}
-    fire(name) {this.listeners[name]?.()}
+    fire(name) {return this.listeners[name]?.({stopPropagation(){},preventDefault(){}})}
+    showModal() {this.open=true}
+    close() {this.open=false}
   }
-  const elements=Object.fromEntries(['search','selection','rows','range','previous','next','select-page','page-size'].map(id=>[id,new Element()]));
-  const messages=[],listeners={};
+  const ids=[...html.matchAll(/\bid="([^"]+)"/g)].map(match=>match[1]);
+  const elements=Object.fromEntries(ids.map(id=>[id,new Element()]));
+  const messages=[],listeners={},requests=[];
   const parent={postMessage:message=>messages.push(message)};
   const document={getElementById:id=>elements[id],createElement:tag=>new Element(tag),createTextNode:text=>({text}),body:{getBoundingClientRect:()=>({height:420})},fonts:{ready:Promise.resolve()}};
   const window={parent,addEventListener:(name,fn)=>listeners[name]=fn};
-  vm.runInNewContext(script,{window,document,requestAnimationFrame:fn=>fn()});
+  if(standalone) {window.parent=window;window.postMessage=message=>messages.push(message)}
   const rows=Array.from({length:25},(_,i)=>({id:String(i),company_name:`Company ${i}`,hr_email:`hr${i}@acme.com`,contact_person:'HR',relevant_skills:'Python',status:i===0?'sent':'pending'}));
+  let persisted=structuredClone(rows);
+  const fetch=async(url,options={})=>{
+    requests.push({url,...options});let data;
+    if(url.startsWith('/api/preview/'))data={to:'current@company.com',subject:'Subject',body:'Body'};
+    else {
+      if(options.method==='PUT') {const id=url.split('/').at(-1);persisted=persisted.map(row=>row.id===id?{...row,...JSON.parse(options.body)}:row)}
+      if(options.method==='DELETE')persisted=persisted.filter(row=>row.id!==url.split('/').at(-1));
+      if(options.method==='POST')persisted=persisted.filter(row=>!JSON.parse(options.body).ids.includes(row.id));
+      data=structuredClone(persisted);
+    }
+    return {ok:true,json:async()=>data};
+  };
+  vm.runInNewContext(script,{window,document,fetch,requestAnimationFrame:fn=>fn()});
   function render(selected_ids=[],disabled=false) {listeners.message({source:parent,data:{type:'streamlit:render',args:{rows,selected_ids,disabled,revision:'v1'}}})}
   const lastValue=()=>messages.filter(m=>m.type==='streamlit:setComponentValue').at(-1)?.value;
-  return {elements,messages,listeners,render,lastValue,rows};
+  return {elements,messages,listeners,render,lastValue,rows,requests};
 }
 
 test('sent rows begin unchecked; explicit selection survives pagination and search',()=>{
@@ -70,4 +86,63 @@ test('batch lock disables editable fields and recipient checkboxes',()=>{
   assert.equal(row.children[0].children[0].children[0].disabled,true);
   assert.equal(row.children[1].children[0].disabled,true);
   assert.equal(table.elements['select-page'].disabled,true);
+  assert.equal(table.elements['select-pending'].disabled,true);
+});
+
+test('select all pending uses the shared toolbar and never auto-selects sent rows',()=>{
+  const table=setup();table.rows[1].needs_review=true;table.render();
+  table.elements['select-pending'].fire('click');
+  assert.equal(table.lastValue().selected_ids.length,23);
+  assert.equal(table.lastValue().selected_ids.includes('0'),false);
+  assert.equal(table.lastValue().selected_ids.includes('1'),false);
+  assert.equal(table.elements['bulk-delete'].hidden,false);
+});
+
+test('edit modal is prefilled; cancel does not change data or selection',()=>{
+  const table=setup();table.render(['2']);
+  table.elements.rows.children[0].children[5].children[0].children[0].fire('click');
+  assert.equal(table.elements['edit-modal'].open,true);
+  assert.equal(table.elements['edit-name'].value,'Company 0');
+  assert.equal(table.elements['edit-status'].value,'sent');
+  table.elements['edit-cancel'].fire('click');
+  assert.equal(table.elements['edit-modal'].open,false);
+  assert.equal(table.lastValue(),undefined);
+  assert.equal(table.elements.selection.textContent,'1 selected');
+});
+
+test('edit submission emits all editable fields and preserves selected recipients',()=>{
+  const table=setup();table.render(['2']);
+  table.elements.rows.children[0].children[5].children[0].children[0].fire('click');
+  table.elements['edit-name'].value='New Name';table.elements['edit-status'].value='pending';
+  table.elements['edit-form'].fire('submit');
+  const event=table.lastValue();assert.equal(event.action.type,'edit');assert.equal(event.action.id,'0');
+  assert.equal(event.action.changes.company_name,'New Name');assert.equal(event.action.changes.status,'pending');
+  assert.deepEqual([...event.selected_ids],['2']);
+});
+
+test('single and bulk deletion emit no destructive action until confirmed',()=>{
+  const table=setup();table.render(['2','18']);
+  table.elements.rows.children[0].children[5].children[0].children[1].fire('click');
+  assert.equal(table.lastValue(),undefined);assert.match(table.elements['delete-description'].textContent,/Company 0/);
+  table.elements['delete-cancel'].fire('click');assert.equal(table.lastValue(),undefined);
+  table.elements['bulk-delete'].fire('click');assert.match(table.elements['delete-description'].textContent,/2 selected/);
+  table.elements['delete-confirm'].fire('click');
+  assert.equal(table.lastValue().action.type,'delete');assert.deepEqual([...table.lastValue().action.ids],['2','18']);
+  assert.equal(table.lastValue().action.bulk,true);
+});
+
+test('standalone queue sends PUT, DELETE and bulk POST to the requested API routes',async()=>{
+  const table=setup(true);const flush=()=>new Promise(setImmediate);await flush();
+  assert.equal(table.elements.rows.children.length,10);
+  table.elements.rows.children[0].children[5].children[0].children[0].fire('click');
+  table.elements['edit-name'].value='API Updated';table.elements['edit-form'].fire('submit');await flush();
+  const update=table.requests.find(r=>r.method==='PUT');assert.equal(update.url,'/api/companies/0');assert.equal(JSON.parse(update.body).company_name,'API Updated');
+  table.elements.rows.children[0].children[5].children[0].children[1].fire('click');
+  assert.equal(table.requests.filter(r=>r.method==='DELETE').length,0);
+  table.elements['delete-confirm'].fire('click');await flush();
+  assert.equal(table.requests.find(r=>r.method==='DELETE').url,'/api/companies/0');
+  const checkbox=table.elements.rows.children[0].children[0].children[0].children[0];checkbox.checked=true;checkbox.fire('change');
+  table.elements['bulk-delete'].fire('click');table.elements['delete-confirm'].fire('click');await flush();
+  const bulk=table.requests.find(r=>r.method==='POST');assert.equal(bulk.url,'/api/companies/bulk-delete');assert.deepEqual(JSON.parse(bulk.body),{ids:['1']});
+  assert.equal(table.elements.selection.textContent,'0 selected');
 });

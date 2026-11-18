@@ -122,10 +122,24 @@ FEU TECH - DARRYLL PAJAGANAS - Internship Application - BSCSSE - 2TSY2627 - Inte
 - **Configuration:** test MCP discovery, enter the CV path, and choose Draft or
   Send Mode. Draft is the default. No email is processed by a connection test.
 - **Companies:** edit company/contact/skills/email cells inline; valid edits
-  persist automatically. Status is managed by batch results. Select individual
+  persist automatically. Use the pencil action to edit all fields and status,
+  including resetting a completed row to Pending. Blank contact and skills fields
+  default to `Hiring Team` and `software development`. Select individual
   rows or all pending rows. Sent rows are never selected automatically; manually
   checking a sent row explicitly permits processing it again, with a warning in
   confirmation. Selections clear after every batch.
+- **Remove companies:** the trash action removes one row after confirmation.
+  **Delete Selected (N)** removes the complete selection, including rows selected
+  on other pages or hidden by the current search. Cancel leaves the queue intact.
+  Removing a queue record does not delete, recall, or modify any Gmail messages.
+  Edits/removals are blocked during an active mail batch. An uncertain delivery
+  must be reconciled before its status can be changed; the edit modal does not
+  bypass recovery review. Edits keep the same stable company ID, so its active
+  email preview refreshes without switching to another company. Deleting the
+  previewed company selects the next available preview, or shows the empty state.
+  All row action buttons leave batch selection unchanged unless their confirmed
+  deletion removes a selected row. Queue mutations invalidate an open batch
+  confirmation so recipients must be reviewed again before mail execution.
 - **Import:** upload UTF-8 CSV or a JSON array, then click Import. Required fields
   are `company_name`, `hr_email`, `contact_person`, `relevant_skills`.
   Import is all-or-nothing for malformed rows, skips duplicate HR addresses
@@ -188,12 +202,49 @@ contains application contacts and results; review it before committing.
 
 ## Code map and verification
 
+### Optional FastAPI queue manager
+
+The main mail dashboard remains Streamlit at port 8501. A standalone queue page
+and REST API use the same `companies.json` and the same validation/atomic store:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+Open [the API queue page](http://127.0.0.1:8000/) or
+[interactive API documentation](http://127.0.0.1:8000/docs).
+The standalone queue page calls the REST endpoints below. The embedded Streamlit
+table uses its component bridge to the same store and requires no second server.
+Both render the shared `static/index.html`; it contains edit/status and remove
+confirmation dialogs. The standalone page includes a live body/recipient preview;
+use the main dashboard to review CV attachments, optional copies, or execute mail
+batches. Changes made in the other queue view appear on the next refresh/rerun.
+
+| Method | Endpoint | Request / result |
+| --- | --- | --- |
+| GET | `/api/companies` | Full queue |
+| PUT | `/api/companies/{id}` | Company name, HR email, contact, skills, status; returns full updated queue |
+| DELETE | `/api/companies/{id}` | Removes one record; returns full updated queue |
+| POST | `/api/companies/bulk-delete` | `{"ids": ["company-id", "another-id"]}`; returns full updated queue |
+| GET | `/api/preview/{id}` | Current To, subject, rendered template body |
+
+Malformed input returns 422, an unknown individual ID returns 404, and an active
+batch, conflicting edit, or unreconciled status change returns 409. Bulk deletion
+removes matching IDs in one atomic write, ignores unknown IDs, and does not require
+index-based identifiers. IDs remain stable when a company's email address changes.
+The API is intended for local loopback use. Pydantic request validation and the
+test setup follow the [FastAPI request-body](https://fastapi.tiangolo.com/tutorial/body/)
+and [testing](https://fastapi.tiangolo.com/tutorial/testing/) documentation.
+
 | File | Responsibility |
 | --- | --- |
 | `app.py` | Four dashboard sections, confirmation, orchestration, streaming events |
+| `main.py` | Optional local FastAPI company edit/delete and preview API |
 | `core.py` | Models, rendering, CV validation, atomic persistence/import, batch runner |
 | `mcp_client.py` | Async stdio lifecycle, paginated discovery, schema checks, tool calls |
-| `ui.py`, `ui/` | Presentation helpers, dashboard tokens, accessible editable company table |
+| `ui.py`, `ui/` | Presentation helpers and dashboard tokens |
+| `static/index.html` | Shared company table, edit/delete dialogs, and standalone API queue page |
 | `static/fonts/` | Locally served Inter and JetBrains Mono fonts with OFL licenses |
 | `DESIGN.md` | Dashboard layout, typography, color, and interaction decisions |
 | `DESIGN_REVIEW.md` | Verification results, checker limitations, and open findings |

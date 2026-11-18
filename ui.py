@@ -9,7 +9,7 @@ from pathlib import Path
 import streamlit.components.v1 as components
 
 UI_ROOT = Path(__file__).resolve().parent / "ui"
-_company_table = components.declare_component("company_table", path=str(UI_ROOT / "company_table"))
+_company_table = components.declare_component("company_table", path=str(UI_ROOT.parent / "static"))
 
 
 def stylesheet() -> str:
@@ -27,7 +27,11 @@ def company_table(companies, selected_ids, *, disabled=False, key="company_table
     revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
     event = _company_table(rows=rows, selected_ids=selected_ids, revision=revision,
                            disabled=disabled, key=key, default=None)
-    return event if event and event.get("revision") == revision else None
+    if event and event.get("revision") == revision:
+        return event
+    if event and event.get("action"):
+        return {**event, "stale": True}
+    return None
 
 
 def preview_metadata(recipient: str, subject: str, filename: str, *, cc=(), bcc=()) -> str:

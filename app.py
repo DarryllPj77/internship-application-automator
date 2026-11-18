@@ -10,7 +10,7 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
-from core import (SUBJECT, FIELDS, PLACEHOLDER, Company, CompanyStore, EmailSettings,
+from core import (SUBJECT, FIELDS, PLACEHOLDER, Company, CompanyEdit, CompanyStore, EmailSettings,
                   atomic_text, email_payload, import_companies, render_template,
                   run_batch, validate_pdf, load_email_settings, save_email_settings, save_uploaded_cv)
 from mcp_client import GmailMCPClient
@@ -181,12 +181,32 @@ def main():
             st.markdown('<div class="section-label">01 / Company queue</div>', unsafe_allow_html=True)
             st.header("Target companies", anchor=False)
             st.caption("Edit a field to save. Select the companies for your next batch.")
-            if st.button("Select all pending", disabled=job_running):
-                st.session_state.selected_ids = [c.id for c in companies if c.status == "pending" and not c.needs_review]
-                reload_table()
             selected_ids = st.session_state.get("selected_ids", [])
             editor_key = f"companies_editor_{st.session_state.get('editor_version', 0)}"
             event = company_table(companies, selected_ids, disabled=job_running, key=editor_key)
+            if event and event.get("action"):
+                action = event["action"]
+                nonce = action.get("nonce")
+                if nonce and nonce != st.session_state.get("last_queue_action"):
+                    st.session_state.last_queue_action = nonce
+                    try:
+                        if job_running:
+                            raise ValueError("Wait for the current batch to finish before changing the queue")
+                        if event.get("stale"):
+                            raise ValueError("The queue changed. Reopen the company action and review it again.")
+                        if action.get("type") == "edit":
+                            companies = STORE.edit_company(action["id"], CompanyEdit.model_validate(action["changes"]), expected=companies)
+                        elif action.get("type") == "delete":
+                            companies = STORE.remove_companies(action["ids"], expected=companies)
+                        else:
+                            raise ValueError("Unknown company action")
+                        st.session_state.selected_ids = [identity for identity in event.get("selected_ids", selected_ids) if any(c.id == identity for c in companies)]
+                        st.session_state.pop("confirmation_job", None)
+                        st.toast("Company queue updated")
+                        reload_table()
+                    except (ValueError, KeyError, OSError) as exc:
+                        st.error(f"Queue change not saved: {exc}")
+                event = None
             edited = {row["id"]: row for row in event["rows"]} if event and not job_running else {}
             chosen_ids = set(event["selected_ids"] if event and not job_running else selected_ids)
             selected = []
@@ -273,7 +293,12 @@ def main():
             with preview_tab:
                 st.markdown("**Live email preview**")
                 if companies:
-                    preview = st.selectbox("Preview company", companies, format_func=lambda c: f"{c.company_name} · {c.hr_email}")
+                    preview_by_id = {c.id: c for c in companies}
+                    if st.session_state.get("preview_company_id") not in preview_by_id:
+                        st.session_state.preview_company_id = companies[0].id
+                    preview_id = st.selectbox("Preview company", list(preview_by_id), key="preview_company_id",
+                                              format_func=lambda identity: f"{preview_by_id[identity].company_name} · {preview_by_id[identity].hr_email}")
+                    preview = preview_by_id[preview_id]
                     body = render_template(template, preview)
                     if copies_valid:
                         st.markdown(preview_metadata(preview.hr_email, SUBJECT, Path(cv_path).name if cv_path else "No PDF selected",
