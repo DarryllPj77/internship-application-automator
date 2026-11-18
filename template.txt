@@ -1,0 +1,20 @@
+Dear {contact_person},
+
+Greetings from Green and Gold!
+
+I am Darryll Pajaganas, a 4th-year student from FEU Institute of Technology. I am writing to express my interest in becoming a student intern at {company_name} as a requirement for my undergraduate studies.
+
+I am currently taking a Bachelor of Science in Computer Science specializing in Software Engineering. I am confident that my knowledge and skills in {relevant_skills} can contribute to your company.
+
+Attached is my student resume for your reference. I look forward to hearing from you.
+
+Thank you for your time and consideration.
+
+Best regards,
+
+Darryll Pajaganas
+BS Computer Science – Software Engineering
+FEU Institute of Technology
+djpajaganas@fit.edu.ph
+09629973767
+https://darryll.dev

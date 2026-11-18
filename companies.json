@@ -1,0 +1,18 @@
+[
+  {
+    "id": "sample-northstar",
+    "company_name": "Northstar Software (Sample)",
+    "hr_email": "careers@northstar.example",
+    "contact_person": "Hiring Team",
+    "relevant_skills": "C#, .NET, SQL, and software engineering",
+    "status": "pending"
+  },
+  {
+    "id": "sample-evergreen",
+    "company_name": "Evergreen Digital (Sample)",
+    "hr_email": "internships@evergreen.example",
+    "contact_person": "Human Resources Team",
+    "relevant_skills": "Python, React, and web application development",
+    "status": "pending"
+  }
+]
