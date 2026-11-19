@@ -15,6 +15,8 @@ from core import (SUBJECT, FIELDS, PLACEHOLDER, Company, CompanyEdit, CompanySto
                   run_batch, validate_pdf, load_email_settings, save_email_settings, save_uploaded_cv)
 from mcp_client import GmailMCPClient
 from ui import company_table, preview_metadata, status_pill, stylesheet
+from sources_ui import render_sources
+from matcher_ui import render_matcher
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -174,6 +176,11 @@ def main():
         with column, st.container(key=f"kpi_{status}"):
             st.markdown(status_pill(status), unsafe_allow_html=True)
             st.metric(status.title(), sum(c.status == status for c in companies), label_visibility="collapsed")
+
+    if notice := st.session_state.pop("sources_notice", None):
+        st.success(notice)
+    render_sources(STORE, companies, disabled=job_running)
+    render_matcher(ROOT, disabled=job_running)
 
     with st.container(key="workspace_grid"):
         left, right = st.columns([1.4, 1], gap="small")

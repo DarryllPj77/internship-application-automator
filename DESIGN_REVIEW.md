@@ -1,3 +1,44 @@
+# FEU partner job matcher (2026-11-19)
+
+Added a separate matcher workspace with directory/search-link, discovered-posting,
+and setup tabs. Search links and the full CSV export remain available without a
+provider key. Posting leads distinguish title/snippet evidence from manually
+reviewed employer, role type, language, and availability. Related subsidiaries
+cannot be confirmed as exact partner matches. The email queue is independent.
+
+Live setup read 1,300 company rows from the connected GENERAL MASTERLIST and
+stored 1,286 normalized unique names locally, including partners without email
+addresses. Exported all 5,144 C#/.NET search links. A real discovery request was
+not run because no Brave Search API key is configured. Provider behavior and
+review flows were exercised with mocked search responses, not presented as live
+job-board matches. The saved directory is the user's personal copy.
+
+Verification: 62 Python tests and 10 Node table tests passed. Desktop (1440px)
+and phone (390px) matcher entry renders were inspected. The marketing-page gate
+was not rerun for this functional dashboard addition; earlier gate entries below
+remain historical.
+
+---
+
+# Company sources and opportunity workspace (2026-11-19)
+
+Added a collapsible source workspace above the company queue, retaining the mint
+tokens and existing typography. Directory import uses explicit worksheet/column
+mapping and an editable review table. Role research has a separate tab, source
+links, checked dates, and a review action; applicant skills remain separate.
+The queue summarizes saved role titles and exposes technology mentions on hover.
+
+Verification: 52 Python tests and 10 Node table tests passed, including the full
+review/import/save-posting UI path, existing mail/queue checks, and a real stdio
+MCP handshake. Desktop (1440px) and phone (390px) entry renders were inspected.
+Live Google consent completed and its token was saved. The supplied original
+directory returned Sheets HTTP 400 because it is an Office workbook; reading it
+requires a Drive reader or a native Google Sheets copy. This is separate from the
+offline suite. The existing marketing-page gate findings below are historical;
+that gate was not rerun for this functional dashboard addition.
+
+---
+
 # Latest surface update: Mint Green (2026-11-19)
 
 Current tokens supersede historical palettes below: #D1FAE5 canvas,

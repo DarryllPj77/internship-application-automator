@@ -395,14 +395,24 @@ class DashboardTests(unittest.TestCase):
                 self.assertEqual(app.session_state["selected_ids"], [])
 
     def test_dashboard_renders_and_preview_changes(self):
-        app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
-        self.assertFalse(app.exception)
-        self.assertEqual(app.toggle[0].value, False)
-        self.assertEqual(len(app.metric), 4)
-        self.assertIn("Northstar", app.selectbox[0].options[0])
-        app.selectbox[0].select_index(1).run()
-        self.assertFalse(app.exception)
-        self.assertTrue(any("internships@evergreen.example" in item.value for item in app.markdown))
+        # UI tests must not depend on or modify the applicant's live queue.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            CompanyStore(root / "companies.json")._write([
+                Company(company_name="Northstar", hr_email="careers@northstar.example"),
+                Company(company_name="Evergreen", hr_email="internships@evergreen.example")])
+            atomic_text(root / "template.txt", "Hello {company_name}")
+            code = (ROOT / "app.py").read_text(encoding="utf-8").replace(
+                "ROOT = Path(__file__).resolve().parent", f"ROOT = Path({str(root)!r})")
+            app = AppTest.from_string(code, default_timeout=30).run()
+            self.assertFalse(app.exception)
+            self.assertEqual(app.toggle[0].value, False)
+            self.assertEqual(len(app.metric), 4)
+            preview = next(item for item in app.selectbox if item.label == "Preview company")
+            self.assertIn("Northstar", preview.options[0])
+            preview.select_index(1).run()
+            self.assertFalse(app.exception)
+            self.assertTrue(any("internships@evergreen.example" in item.value for item in app.markdown))
 
     def test_queue_edit_and_delete_update_live_preview_and_selection(self):
         with tempfile.TemporaryDirectory() as directory:

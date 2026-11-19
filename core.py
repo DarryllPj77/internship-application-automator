@@ -78,6 +78,27 @@ def save_email_settings(path: Path, settings: EmailSettings):
     atomic_text(path, settings.model_dump_json(indent=2) + "\n")
 
 
+class Opportunity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=300)
+    technologies: list[str] = Field(default_factory=list, max_length=100)
+    source_url: str = Field(max_length=2048)
+    checked_at: str = Field(max_length=80)
+    posting_date: str = Field(default="", max_length=80)
+    expires: str = Field(default="", max_length=80)
+    verification: Literal["unverified", "reviewed"] = "unverified"
+    notes: str = Field(default="", max_length=5000)
+
+    @field_validator("source_url")
+    @classmethod
+    def public_source(cls, value):
+        from urllib.parse import urlparse
+        parsed = urlparse(value.strip())
+        if parsed.scheme not in ("https", "http") or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("Use an HTTP(S) posting URL without credentials")
+        return value.strip()
+
+
 class Company(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(default_factory=lambda: uuid4().hex, min_length=1)
@@ -88,6 +109,12 @@ class Company(BaseModel):
     status: Literal["pending", "drafted", "sent", "failed"] = "pending"
     needs_review: bool = False
     last_result: str = ""
+    directory_source: str = ""
+    source_row: int | None = None
+    contact_position: str = ""
+    industry: str = ""
+    company_address: str = ""
+    opportunities: list[Opportunity] = Field(default_factory=list, max_length=100)
 
     @field_validator("contact_person", "relevant_skills", mode="before")
     @classmethod

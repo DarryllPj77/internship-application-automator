@@ -110,7 +110,9 @@ function paint() {
     check.setAttribute('aria-label','Select '+row.company_name);
     check.addEventListener('change',()=>{check.checked?selected.add(row.id):selected.delete(row.id);tr.classList.toggle('selected',check.checked);updateSelection(visible);emit()});
     label.append(check);checkCell.append(label);tr.append(checkCell);
-    const companyCell=document.createElement('td');companyCell.append(cellInput(row,'company_name','company-name'),cellInput(row,'relevant_skills','skills'));tr.append(companyCell);
+    const companyCell=document.createElement('td');companyCell.append(cellInput(row,'company_name','company-name'),cellInput(row,'relevant_skills','skills'));
+    if(row.opportunities?.length) {const research=document.createElement('div');research.className='skills';research.style.padding='2px 6px';research.style.color='var(--muted)';research.textContent='Roles: '+row.opportunities.map(o=>o.title).join(' · ');research.title=row.opportunities.map(o=>o.title+': '+(o.technologies?.join(', ')||'Tech stack unknown')).join('\n');companyCell.append(research)}
+    tr.append(companyCell);
     for(const [field,style] of [['hr_email','email'],['contact_person','contact']]) {const td=document.createElement('td');td.append(cellInput(row,field,style));tr.append(td)}
     const state=document.createElement('td'),pill=document.createElement('span'),dot=document.createElement('span');
     const status=['pending','drafted','sent','failed'].includes(row.status)?row.status:'pending';

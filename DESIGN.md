@@ -8,7 +8,20 @@ CV selection, company data, and template content are retained.
 
 The workspace has four functional regions: connection/CV/mode configuration;
 editable company queue; template and exact email preview; confirmed batch execution
-and activity. Equal outer edges, pale mint panels, 8px corners, 20-24px card padding, 16-24px grid gaps, and
+and activity. A collapsible Company sources & opportunities workspace sits above
+the queue: directory source, column mapping, editable contact review, and a separate
+posting research tab. Import and research actions never send mail. Labels distinguish
+the POC's job title from an internship opening and technology mentions from applicant
+skills. Source links, row numbers, checked dates, and manual review remain visible.
+
+A separate FEU Partner Job Matcher expander gives the full directory a searchable
+link table and CSV export without requiring HR-email imports. Three tabs separate
+directory/search links, discovered posting leads, and provider setup. Snippet
+classifications remain distinct from reviewed role/language fields, and exact
+employer review avoids treating related subsidiaries as the same partner. The
+existing mint surfaces, forest headings, restrained buttons, and focus rings apply.
+
+Equal outer edges, pale mint panels, 8px corners, 20-24px card padding, 16-24px grid gaps, and
 hairline borders establish the hierarchy. Status counts use tabular mono figures.
 The current palette uses Soft Mint Green (#D1FAE5) for the canvas,
 Crisp Pale Mint (#ECFDF5) for cards and modals, and #A7F3D0 borders. Inputs,

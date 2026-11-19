@@ -1,0 +1,193 @@
+"""Streamlit partner-job matching workspace; no mail or company-queue writes."""
+from __future__ import annotations
+
+import os
+import time
+from pathlib import Path
+
+import streamlit as st
+from dotenv import dotenv_values
+
+from partner_matcher import (MatcherStore, partner_snapshot, search_links, export_searches,
+    BraveSearch, configured_search_key, search_query, leads_from_results, LeadReview, SearchFailure)
+from sheets_client import SheetsReader, spreadsheet_reference
+
+
+def render_matcher(root: Path, *, disabled=False):
+    store = MatcherStore(root / ".local" / "partner-jobs.json")
+    with st.expander("FEU Partner Job Matcher", expanded=st.query_params.get("matcher") == "1"):
+        st.caption("Find C# / .NET opportunities at companies listed in your FEU directory. Search links work without an API key. A directory entry is not proof of a current partnership or an open internship.")
+        try:
+            state = store.load()
+        except (OSError, ValueError):
+            st.error("Cannot read the private matcher data. Restore .local/partner-jobs.json before continuing.")
+            return
+        notice = st.session_state.pop("matcher_notice", None)
+        if notice:
+            st.success(notice)
+        directory_tab, results_tab, settings_tab = st.tabs(["Partner directory & search links", "Discovered postings", "Discovery setup"])
+        with directory_tab:
+            _directory(root, store, state, disabled)
+        with results_tab:
+            _postings(root, store, state, disabled)
+        with settings_tab:
+            _setup(root)
+
+
+def _directory(root, store, state, disabled):
+    default_url = dotenv_values(root / ".env").get("SHEETS_URL") or os.getenv("SHEETS_URL", "")
+    url = st.text_input("Partner directory spreadsheet URL", value=default_url, key="matcher_source_url", disabled=disabled)
+    if st.button("Load worksheets for matching", disabled=disabled or not url):
+        try:
+            reader = SheetsReader()
+            tabs = reader.worksheets(url)
+            if not tabs:
+                raise ValueError("No worksheets found")
+            st.session_state.matcher_tabs = {"url": url, "tabs": tabs}
+            _, gid = spreadsheet_reference(url)
+            st.session_state.matcher_tab = next((t["title"] for t in tabs if t["sheetId"] == gid), tabs[0]["title"])
+        except Exception as exc:
+            st.session_state.pop("matcher_tabs", None)
+            st.error(f"Cannot read this directory ({type(exc).__name__}). Check the Sheets connection and use a native Google Sheets copy.")
+    loaded = st.session_state.get("matcher_tabs", {})
+    if loaded.get("url") == url:
+        title = st.selectbox("Partner worksheet", [t["title"] for t in loaded["tabs"]], key="matcher_tab", disabled=disabled)
+        st.caption("Choose the source tab that defines your partner list. The masterlist and active-partner tabs may contain different companies; the selected source is retained with the results.")
+        first = st.number_input("Matcher: first company data row", min_value=1, max_value=5000, value=4, step=1, disabled=disabled)
+        column = st.selectbox("Matcher: company-name column", list(range(26)), index=1,
+                              format_func=lambda i: chr(65 + i), disabled=disabled)
+        st.caption("For GENERAL MASTERLIST, use row 4 and column B. Existing research is retained when reloading the same snapshot. Other directory versions are archived locally.")
+        if st.button("Load partner companies & build search links", type="primary", disabled=disabled):
+            try:
+                with st.spinner("Reading partner names…"):
+                    rows = SheetsReader().read(url, title)
+                snapshot = partner_snapshot(rows, source_url=url, worksheet=title,
+                                            first_data_row=int(first), company_column=column)
+                store.set_directory(snapshot)
+                st.session_state.matcher_notice = f"Loaded {len(snapshot['partners'])} unique partner names. Search links are ready; no emails were created or sent."
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Partner directory not updated ({type(exc).__name__}). Check the source and mapping.")
+    directory = state.get("directory")
+    if not directory:
+        st.info("Load the partner names directly from your spreadsheet. You do not need to import HR contacts into the email queue first.")
+        return
+    st.caption(f"Loaded source: {directory['worksheet']} · {len(directory['partners'])} companies · Read {directory['checked_at']}")
+    st.link_button("Open directory source", directory["source_url"])
+    term = st.selectbox("Search technology", ["C#", ".NET", "ASP.NET"], key="matcher_term")
+    location = st.text_input("Search location", value="Philippines", key="matcher_location", max_chars=100)
+    name_filter = st.text_input("Filter partner names", key="matcher_company_filter")
+    partners = [p for p in directory["partners"] if name_filter.casefold() in p["name"].casefold()]
+    st.caption("These links open company-specific searches, not verified vacancies. Try .NET as well as C#; a .NET role does not necessarily use C#. On narrow screens, scroll the table horizontally to reach the links.")
+    rows = [{"Company": p["name"], "Directory rows": ", ".join(map(str, p["source_rows"])),
+             **search_links(p["name"], term, location)} for p in partners]
+    st.dataframe(rows, hide_index=True, width="stretch", height=400,
+        column_config={"Indeed search": st.column_config.LinkColumn("Indeed search", display_text="Search Indeed"),
+                       "JobStreet search": st.column_config.LinkColumn("JobStreet search", display_text="Search JobStreet")})
+    st.download_button("Download all partner search links (CSV)", export_searches(directory["partners"], location),
+                       file_name="feu-partner-job-searches.csv", mime="text/csv")
+    st.caption(f"Showing {len(partners)} of {len(directory['partners'])} partners. The download includes all partners and both C# and .NET searches.")
+
+
+def _postings(root, store, state, disabled):
+    directory = state.get("directory")
+    if not directory:
+        st.info("Load partner companies in the first tab to discover and match job postings")
+        return
+    partners = directory["partners"]
+    by_id = {p["id"]: p for p in partners}
+    location = st.session_state.get("matcher_location", "Philippines")
+    searched = {key for key, value in state["searches"].items() if key in by_id and value["query"] == search_query(by_id[key]["name"], location)}
+    st.caption(f"Coverage for this location: {len(searched)} / {len(partners)} companies searched. Each search checks up to 10 indexed results; this cannot establish that no vacancies exist.")
+    key = configured_search_key(root)
+    if not key:
+        st.info("Automatic discovery needs BRAVE_SEARCH_API_KEY in your local .env. Partner search links remain available without it. See Discovery setup.")
+    selected = st.multiselect("Companies to discover (up to 10)", list(by_id),
+                             format_func=lambda k: by_id[k]["name"], max_selections=10, disabled=disabled)
+    batch_size = st.number_input("Companies per next batch", min_value=1, max_value=10, value=3, step=1, disabled=disabled)
+    st.caption("One provider request per company, no automatic retries. Only company names, C#/.NET keywords, and search location are sent to Brave; HR addresses, CVs, and email bodies are not sent.")
+    run_selected = st.button(f"Discover postings for selected ({len(selected)})", type="primary", disabled=disabled or not selected or not key)
+    remaining = [p["id"] for p in partners if p["id"] not in searched]
+    run_next = st.button(f"Discover next {min(int(batch_size), len(remaining))} unsearched companies",
+                         disabled=disabled or not key or not remaining)
+    targets = selected if run_selected else remaining[:int(batch_size)] if run_next else []
+    if targets:
+        progress = st.progress(0, text="Starting discovery…")
+        client = BraveSearch(key)
+        completed = 0
+        for i, identity in enumerate(targets):
+            partner = by_id[identity]
+            query = search_query(partner["name"], location)
+            try:
+                results = client.search(query)
+                leads = leads_from_results(partner, results)
+                store.record_search(directory["revision"], identity, query, leads)
+                completed += 1
+                progress.progress(completed / len(targets), text=f"{partner['name']}: {len(leads)} posting leads")
+            except (SearchFailure, ValueError, OSError) as exc:
+                st.error(str(exc))
+                st.caption(f"Stopped after {completed} completed companies. Completed results are saved; the failing company remains unsearched.")
+                break
+            if i < len(targets) - 1:
+                time.sleep(1.1)
+        if completed == len(targets):
+            st.session_state.matcher_notice = f"Searched {completed} companies. Posting leads need employer and availability review."
+            st.rerun()
+        state = store.load()
+    leads = list(state["leads"].values())
+    st.caption("Saved leads come from search titles/snippets. Company identity and vacancy availability are unverified until you review the posting. A full-time C# vacancy is a hiring signal, not an internship offer.")
+    status = st.selectbox("Posting review filter", ["All", "unreviewed", "reviewed", "rejected", "unavailable"])
+    filtered = [lead for lead in leads if status == "All" or lead["verification"] == status]
+    focus = st.selectbox("Opportunity focus", ["All leads (internships first)", "Internship/OJT leads", "C# mentioned or confirmed", "Reviewed C# internships"])
+    def is_intern(lead):
+        return lead["role_type"] == "Internship/OJT" if lead["verification"] == "reviewed" else lead["classification"].startswith("Internship")
+    if focus == "Internship/OJT leads":
+        filtered = [lead for lead in filtered if is_intern(lead)]
+    elif focus == "C# mentioned or confirmed":
+        filtered = [lead for lead in filtered if lead["language"] == "C# confirmed" or "C# mentioned" in lead["classification"]]
+    elif focus == "Reviewed C# internships":
+        filtered = [lead for lead in filtered if lead["verification"] == "reviewed" and is_intern(lead) and lead["language"] == "C# confirmed"]
+    filtered.sort(key=lambda lead: (not is_intern(lead), lead["partner_name"].casefold()))
+    st.dataframe([{"Partner": x["partner_name"], "Role": x["title"], "Evidence classification": x["classification"],
+        "Review": x["verification"], "Reviewed role": x["role_type"], "Reviewed language": x["language"],
+        "Board": x["board"], "Posting": x["url"], "Checked": x["checked_at"]}
+        for x in filtered], hide_index=True, width="stretch",
+        column_config={"Posting": st.column_config.LinkColumn("Posting", display_text="Open posting")})
+    if not filtered:
+        st.caption("No saved postings match this filter. Search links are available in the first tab.")
+        return
+    lead_id = st.selectbox("Posting to review", [x["id"] for x in filtered],
+                          format_func=lambda k: next(f"{x['partner_name']} · {x['title']}" for x in filtered if x["id"] == k))
+    lead = state["leads"][lead_id]
+    st.link_button("Open original job posting", lead["url"])
+    st.text(lead["evidence"])
+    st.caption(f"Directory employer: {lead['partner_name']} · Source worksheet: {directory['worksheet']}")
+    with st.form(f"lead_review_{lead_id}"):
+        employer = st.text_input("Employer name shown on the posting", value=lead["employer"], disabled=disabled)
+        role_options, language_options = ["Unknown", "Internship/OJT", "Full-time/other"], ["Unconfirmed", "C# confirmed", ".NET related"]
+        role = st.selectbox("Reviewed role type", role_options, index=role_options.index(lead["role_type"]), disabled=disabled)
+        language = st.selectbox("Reviewed language evidence", language_options, index=language_options.index(lead["language"]), disabled=disabled)
+        outcomes = ["reviewed", "rejected", "unavailable"]
+        outcome = st.selectbox("Review outcome", outcomes, index=outcomes.index(lead["verification"]) if lead["verification"] in outcomes else 0, disabled=disabled)
+        notes = st.text_area("Matcher review notes", value=lead["notes"], disabled=disabled)
+        checked = st.checkbox("I checked the employer identity, role details, and current availability on the source", disabled=disabled)
+        if st.form_submit_button("Save posting review", type="primary", disabled=disabled):
+            try:
+                if not checked:
+                    raise ValueError("Check the source-review acknowledgement before saving")
+                store.review(lead_id, LeadReview(employer=employer.strip(), role_type=role,
+                    language=language, outcome=outcome, notes=notes), lead)
+                st.session_state.matcher_notice = "Saved posting review. Application status and applicant skills were preserved."
+                st.rerun()
+            except (ValueError, OSError) as exc:
+                st.error(f"Review not saved: {exc}")
+
+
+def _setup(root):
+    st.write("Search links require no API key. Automatic discovery uses Brave Search API, not a direct Indeed or JobStreet account connection.")
+    st.link_button("Open Brave Search API setup", "https://api-dashboard.search.brave.com/")
+    st.caption("Check the provider's current plans before creating a key. Configure a key locally; don't paste it into chat or commit it to Git.")
+    st.code("BRAVE_SEARCH_API_KEY='your-key-here'", language="dotenv")
+    st.caption("Add that variable to the project's .env. This panel reads it again on each rerun; refresh the page after saving. Google Sheets authorization does not grant web-search access.")
+    st.write("Search key: " + ("Configured locally" if configured_search_key(root) else "Not configured"))
+    st.caption("Discovery is limited to 10 companies per button click, with no automatic retries or unattended runs. It stores only leads from specific Indeed/JobStreet posting URLs, never search-result pages. Search snippets may be incomplete, stale, or refer to a related company; review them before applying.")

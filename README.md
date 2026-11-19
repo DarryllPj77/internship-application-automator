@@ -267,3 +267,191 @@ sizes, and selecting the visible page. Selections are retained across searches
 and pages. Template and Email preview tabs share one writing panel. Reduced-motion
 preferences disable animation. Fonts are bundled locally; no font-service network
 request is needed. Restart Streamlit after changing its server/static-file settings.
+
+## Company directory, Google Sheets, and opportunity research
+
+Open **Company sources & opportunities** above the company queue, or use
+[the expanded source workspace](http://127.0.0.1:8501/?sources=1).
+The Streamlit app reads Sheets directly through Google's API. An optional local
+MCP server exposes the same read-only directory access for MCP clients.
+Neither source path calls Gmail or automatically starts an application batch.
+
+### Connect Google Sheets once
+
+1. In the same Google Cloud project used for Gmail, enable
+   [Google Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com).
+2. Use a **Desktop app** OAuth client from Google Auth Platform → Clients.
+   You can reuse the Gmail client JSON if its top-level key is `installed`.
+   A Web application client requires a separate Desktop client for this flow.
+3. Set `SHEETS_CLIENT_FILE` in your local `.env` to that JSON's absolute path.
+   Optionally set `SHEETS_URL` to prefill the directory URL. Do not commit `.env`
+   or OAuth credentials. If the consent app is in Testing, add the Google account
+   that can view the directory under Audience → Test users.
+4. Install the updated dependencies, then authorize from the project terminal:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+   .\.venv\Scripts\python.exe sheets_client.py auth
+   ```
+
+   Choose the account that can open the spreadsheet. Grant read-only Sheets
+   access. The callback uses a temporary loopback port with a 15-minute timeout.
+   Tokens are kept in ignored `.local/sheets-token.json`, separately from Gmail.
+   Re-run this command when authorization expires or to choose another account.
+5. In the app, paste the spreadsheet URL, click **Connect / list worksheets**,
+   choose the worksheet, then **Read worksheet**. The URL's `gid` selects the
+   initial tab. Reads are bounded to A1:AZ5000 and never modify the source.
+
+If Google reports insufficient access, sign in using the account that has access,
+or request access from the owner. The XLSX badge means the source may still be
+an Excel workbook: use **Upload Excel / CSV**, or a Google Sheets copy you are
+permitted to create. No public sharing or school-sheet editing is required.
+
+Google setup references: [Python quickstart](https://developers.google.com/workspace/sheets/api/quickstart/python),
+[read-only scope](https://developers.google.com/workspace/sheets/api/scopes).
+
+### Review and import contacts
+
+Both Google Sheets and Excel/CSV use the same preview and column mapping.
+Excel/CSV uploads allow up to 10 MB, 5,000 rows, and 52 columns. Formulas are
+not evaluated. Select the actual worksheet, first data row, company column,
+POC name, POC job title, email, industry, and address columns.
+
+For the supplied FEU directory layout: first data row **4**, company **B**,
+POC name **E**, POC position **F**, POC email **G**, industry **C**, address **D**.
+These are editable mappings, not assumed headers. POC Position is the contact's
+job title, not a vacancy. To import POC 2, map that group's columns and review again;
+each queue row represents one selected contact and email address.
+
+Check **Include** for the contacts you want and edit incorrect cells in the
+preview before **Add reviewed contacts to queue**. Missing or invalid emails
+start unchecked and are never guessed. Importing a checked invalid address
+rejects the entire import. Existing email addresses are skipped case-insensitively;
+existing company edits, Sent/Drafted status, recovery markers, and application
+results are preserved. New contacts start Pending. Source and row provenance
+are saved in `companies.json`. Re-reading a directory does not automatically
+overwrite contacts or update changed email addresses; review those manually.
+
+### Research roles and technology mentions
+
+Under **Roles & tech stacks**, choose an imported company/POC. Paste a specific
+posting URL and click **Read posting & suggest details**. Public HTTPS HTML pages
+can be read directly. For LinkedIn, JobStreet, sign-in pages, blocked sites, or
+JavaScript-only job pages, paste the posting text alongside its source URL.
+No LinkedIn/JobStreet account connection or automated account scraping is used.
+
+The reader extracts a suggested title, technology keyword mentions, and posting/
+expiry dates when JobPosting structured data supplies them. These are suggestions,
+not proof of an active opening or a complete company technology stack. Review
+the company match, edit the role and technologies, and confirm before saving.
+Unknown technologies and dates stay Unknown. It does not search job boards for
+you, confirm applications are open, or infer a stack from an industry label.
+
+Saved postings retain their source, checked timestamp, review state, and notes.
+Saving the same source URL replaces that contact's previous research snapshot.
+They are visible in the research panel and summarized in the queue. Remove a
+saved posting from its details panel if needed. Applicant `relevant_skills`,
+email templates, recipients, and application statuses are not modified by research.
+All queue writes respect the existing batch lock and concurrent-edit detection.
+There is no LLM/API-token usage for the deterministic import and keyword reader.
+
+### Optional read-only Sources MCP server
+
+After Sheets authorization, an MCP client can launch the local stdio server with
+the absolute Python executable and script paths (JSON backslashes must be escaped):
+
+```json
+{
+  "mcpServers": {
+    "internship-sources": {
+      "command": "E:\\Darryll pogi\\ResumeForJOB\\AutomatedApplication\\.venv\\Scripts\\python.exe",
+      "args": ["E:\\Darryll pogi\\ResumeForJOB\\AutomatedApplication\\sources_mcp.py"]
+    }
+  }
+}
+```
+
+Adapt paths and configuration syntax for your MCP client. The server exposes only
+`list_directory_worksheets` and `read_directory_worksheet`; it cannot edit Sheets,
+change the queue, or send emails. Cell values are external data, not instructions.
+This is separate from the existing Gmail MCP server. The app does not need an
+additional MCP connection to use its built-in directory importer.
+
+## FEU Partner Job Matcher
+
+Open [the partner matcher](http://127.0.0.1:8501/?matcher=1), below the status
+counters. This workspace is separate from the email queue: it includes partners
+without HR addresses and never creates drafts, sends emails, or changes applicant
+skills. A row in a selected FEU directory tab is not proof of a current partnership
+agreement. Keep the source tab and its date in mind when applying.
+
+### Partner names and search links (no key needed)
+
+1. Click **Load worksheets for matching**, select your partner worksheet, and
+   confirm the first data row and company-name column. For GENERAL MASTERLIST,
+   use **row 4 / column B**. Other tabs can have different layouts.
+2. Click **Load partner companies & build search links**. Duplicate company names
+   are merged after normalizing punctuation and trailing legal suffixes; parent
+   companies, subsidiaries, and different geographic entities remain separate.
+   Source row numbers and the selected worksheet are preserved.
+3. Choose **C#**, **.NET**, or **ASP.NET** and a location. Each row opens the
+   corresponding company-specific Indeed or JobStreet search. These are search
+   links, not verified vacancies; each job board controls its search behavior.
+4. **Download all partner search links (CSV)** exports the complete loaded list
+   with both C# and .NET searches on both boards, even if the table is filtered.
+
+The connected personal sheet was loaded into the private local matcher snapshot
+during setup. Use the load controls to refresh it or switch tabs. Your personal
+copy does not automatically follow updates in the school's original Excel file.
+
+### Automatic posting discovery (optional provider key)
+
+The **Discovered postings** tab searches the web index for specific Indeed and
+JobStreet posting pages. It does not connect to your personal job-board accounts.
+Indeed/SEEK partner APIs are not used for unrestricted job-board searches.
+
+To enable discovery, obtain a key from the
+[Brave Search API dashboard](https://api-dashboard.search.brave.com/). Review the
+provider's current plans and costs yourself before activating access. Add this
+to your local ignored `.env`, then refresh the page:
+
+```dotenv
+BRAVE_SEARCH_API_KEY='your-key-here'
+```
+
+The key is read on rerun and never displayed. Search-link generation works without
+it. No provider account, paid plan, or API key is created automatically.
+API reference: [Brave Web Search](https://api-dashboard.search.brave.com/documentation/services/web-search).
+
+Choose up to **10 companies per batch**, or use **Discover next N unsearched
+companies** (default 3). Each company uses one provider request and up to 10
+results. Requests are spaced 1.1 seconds apart; failures and rate limits stop the
+batch without automatic retries. Successful company searches are saved as they
+complete, so the next batch can resume. A changed location requires a new search.
+Only company names, C#/.NET search terms, and the location are sent to Brave.
+CVs, HR contact information, and application email content are not sent.
+
+Only specific Indeed `viewjob` pages and JobStreet `/job/ID` pages qualify as
+posting leads. Search pages and unsupported domains are discarded; tracking
+parameters are removed. Classification uses titles and search snippets, not a
+verified live vacancy or a complete company technology stack. In particular:
+
+- Internship/OJT leads are prioritized using the posting title.
+- Explicit C# mentions are distinguished from .NET-related roles with C# unconfirmed.
+- A full-time developer opening is a hiring signal, not an internship offer.
+- A company query returning a result does not prove that employer is the FEU partner.
+- No indexed result means **no candidate found by that search**, not **no jobs exist**.
+
+Use **Opportunity focus → Reviewed C# internships** to see only postings you have
+reviewed as matching the employer, internship type, and C# language requirement.
+Before saving a review, open the source, enter the employer shown on the posting,
+choose role/language evidence, and check the acknowledgement. Related companies
+cannot be confirmed as exact partner matches. Mark stale/closed ads **unavailable**
+or unrelated results **rejected**. This records a review timestamp; it does not
+automatically apply to or import that company into the mail queue.
+
+Data is saved atomically in ignored `.local/partner-jobs.json`. Repeated searches
+retain manual reviews/rejections. Switching directory versions archives the old
+results; loading that version again restores its research. Matcher mutations
+have independent write locks and stale-review checks. Source snapshots and search
+results are private local app state, not additions to the public repository.
