@@ -72,19 +72,17 @@ def suggested_search_name(name: str) -> str:
     return re.sub(r"\s+", " ", value) or name.strip()
 
 
-def search_links(name: str, term="C#", location="Philippines", *, search_name=None) -> dict:
-    if term not in ("C#", ".NET", "ASP.NET"):
-        raise ValueError("Unknown technology search")
+def search_links(name: str, location="Philippines", *, search_name=None) -> dict:
     query_name = search_name.strip() if search_name else suggested_search_name(name)
     return {
-        "Indeed search": "https://ph.indeed.com/jobs?" + urlencode({"q": f'{query_name} {term}', "l": location}),
-        "JobStreet search": "https://ph.jobstreet.com/jobs?" + urlencode({"keywords": f'{query_name} {term}', "where": location})}
+        "Indeed search": "https://ph.indeed.com/jobs?" + urlencode({"q": query_name, "l": location}),
+        "JobStreet search": "https://ph.jobstreet.com/jobs?" + urlencode({"keywords": query_name, "where": location})}
 
 
 def export_searches(partners, location="Philippines", search_names=None) -> bytes:
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["company", "source_rows", "search_name", "C# Indeed search", "C# JobStreet search", ".NET Indeed search", ".NET JobStreet search"])
+    writer.writerow(["company", "source_rows", "search_name", "Indeed search", "JobStreet search"])
     for partner in partners:
         # Guard spreadsheet formula execution in exported company cells.
         name = partner["name"]
@@ -92,7 +90,7 @@ def export_searches(partners, location="Philippines", search_names=None) -> byte
         query_name = (search_names or {}).get(partner.get("id"), suggested_search_name(name))
         safe_query = "'" + query_name if query_name.lstrip().startswith(("=", "+", "-", "@")) else query_name
         writer.writerow([safe_name, ", ".join(map(str, partner["source_rows"])), safe_query,
-            *search_links(name, "C#", location, search_name=query_name).values(), *search_links(name, ".NET", location, search_name=query_name).values()])
+            *search_links(name, location, search_name=query_name).values()])
     return output.getvalue().encode("utf-8-sig")
 
 

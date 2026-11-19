@@ -74,7 +74,6 @@ def _directory(root, store, state, disabled):
         return
     st.caption(f"Loaded source: {directory['worksheet']} · {len(directory['partners'])} companies · Read {directory['checked_at']}")
     st.link_button("Open directory source", directory["source_url"])
-    term = st.selectbox("Search technology", ["C#", ".NET", "ASP.NET"], key="matcher_term")
     location = st.text_input("Search location", value="Philippines", key="matcher_location", max_chars=100)
     name_filter = st.text_input("Filter partner names", key="matcher_company_filter")
     partners = [p for p in directory["partners"] if name_filter.casefold() in p["name"].casefold()]
@@ -93,16 +92,16 @@ def _directory(root, store, state, disabled):
                     st.rerun()
                 except (ValueError, OSError) as exc:
                     st.error(str(exc))
-    st.caption("These links open company-specific searches, not verified vacancies. Try .NET as well as C#; a .NET role does not necessarily use C#. On narrow screens, scroll the table horizontally to reach the links.")
+    st.caption("These links search by company name only, without added technology keywords. They are not verified vacancies. On narrow screens, scroll the table horizontally to reach the links.")
     st.caption("Search names omit legal suffixes and directory markers. Job boards may show broader results; always check the employer on each posting.")
     rows = [{"Company": p["name"], "Search name": search_names.get(p["id"], suggested_search_name(p["name"])), "Directory rows": ", ".join(map(str, p["source_rows"])),
-             **search_links(p["name"], term, location, search_name=search_names.get(p["id"]))} for p in partners]
+             **search_links(p["name"], location, search_name=search_names.get(p["id"]))} for p in partners]
     st.dataframe(rows, hide_index=True, width="stretch", height=400,
         column_config={"Indeed search": st.column_config.LinkColumn("Indeed search", display_text="Search Indeed"),
                        "JobStreet search": st.column_config.LinkColumn("JobStreet search", display_text="Search JobStreet")})
     st.download_button("Download all partner search links (CSV)", export_searches(directory["partners"], location, search_names),
                        file_name="feu-partner-job-searches.csv", mime="text/csv")
-    st.caption(f"Showing {len(partners)} of {len(directory['partners'])} partners. The download includes all partners and both C# and .NET searches.")
+    st.caption(f"Showing {len(partners)} of {len(directory['partners'])} partners. The download includes company-name searches for all partners on both boards.")
 
 
 def _postings(root, store, state, disabled):

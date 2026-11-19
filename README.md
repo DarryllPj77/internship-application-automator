@@ -394,7 +394,8 @@ agreement. Keep the source tab and its date in mind when applying.
    are merged after normalizing punctuation and trailing legal suffixes; parent
    companies, subsidiaries, and different geographic entities remain separate.
    Source row numbers and the selected worksheet are preserved.
-3. Choose **C#**, **.NET**, or **ASP.NET** and a location. Each row opens the
+3. Choose a location. Each row searches by the shortened company name only, with
+   no added C#, .NET, or other technology keywords, and opens the
    corresponding company-specific Indeed or JobStreet search. These are search
    links, not verified vacancies; each job board controls its search behavior.
    Searches use shortened names: directory markers and trailing legal text such
@@ -406,7 +407,7 @@ agreement. Keep the source tab and its date in mind when applying.
    never approves a different employer as the same partner. Job boards may show
    broader fallback results, so verify the employer on each specific posting.
 4. **Download all partner search links (CSV)** exports the complete loaded list
-   with both C# and .NET searches on both boards, even if the table is filtered.
+   with company-name searches on both boards, even if the table is filtered.
 
 The connected personal sheet was loaded into the private local matcher snapshot
 during setup. Use the load controls to refresh it or switch tabs. Your personal

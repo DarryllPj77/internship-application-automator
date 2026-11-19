@@ -40,14 +40,15 @@ class PartnerMatchingTests(unittest.TestCase):
         self.assertFalse(employer_matches("Aboitiz", "Aboitiz Foods"))
         self.assertFalse(employer_matches("ABC Philippines Inc.", "ABC Global Inc."))
 
-    def test_search_links_encode_csharp_and_export_all_companies(self):
-        links = search_links("A & B #1", "C#")
+    def test_search_links_use_only_company_name_and_export_all_companies(self):
+        links = search_links("A & B #1")
         query = parse_qs(urlsplit(links["Indeed search"]).query)
-        self.assertEqual(query["q"], ['A & B #1 C#'])
+        self.assertEqual(query["q"], ['A & B #1'])
+        self.assertEqual(parse_qs(urlsplit(links["JobStreet search"]).query)["keywords"], ['A & B #1'])
         self.assertEqual(urlsplit(links["JobStreet search"]).fragment, "")
         rows = list(csv.reader(io.StringIO(export_searches(directory()["partners"]).decode("utf-8-sig"))))
         self.assertEqual(len(rows), 4)
-        self.assertEqual(len(rows[0]), 7)
+        self.assertEqual(len(rows[0]), 5)
         unsafe = [{"name": "=CMD()", "source_rows": [4]}]
         self.assertTrue(list(csv.reader(io.StringIO(export_searches(unsafe).decode("utf-8-sig"))))[1][0].startswith("'="))
 
@@ -63,7 +64,8 @@ class PartnerMatchingTests(unittest.TestCase):
     def test_legal_directory_name_is_shortened_for_search_only(self):
         original = "BCS Technology PTY. LTD. Philippines - ROHQ *"
         self.assertEqual(suggested_search_name(original), "BCS Technology")
-        self.assertEqual(parse_qs(urlsplit(search_links(original)["Indeed search"]).query)["q"], ["BCS Technology C#"])
+        self.assertEqual(parse_qs(urlsplit(search_links(original)["Indeed search"]).query)["q"], ["BCS Technology"])
+        self.assertEqual(parse_qs(urlsplit(search_links("Questronix")["JobStreet search"]).query)["keywords"], ["Questronix"])
         self.assertIn('"BCS Technology"', search_query(original, "Philippines"))
         self.assertFalse(employer_matches(original, "BCS Information Technology Corp."))
         self.assertEqual(suggested_search_name("ABC Philippines"), "ABC Philippines")
@@ -78,7 +80,7 @@ class PartnerMatchingTests(unittest.TestCase):
             state = store.load()
             self.assertEqual(state["search_names"][partner["id"]], "Software Brand")
             self.assertEqual(state["directory"], snapshot)
-            self.assertIn("Software Brand C#", parse_qs(urlsplit(search_links(partner["name"], search_name="Software Brand")["Indeed search"]).query)["q"])
+            self.assertIn("Software Brand", parse_qs(urlsplit(search_links(partner["name"], search_name="Software Brand")["Indeed search"]).query)["q"])
             with self.assertRaises(ValueError):
                 store.set_search_name("stale", partner["id"], "Other")
 
