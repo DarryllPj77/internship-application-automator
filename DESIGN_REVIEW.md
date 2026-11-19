@@ -1,3 +1,19 @@
+# Job-board search-name correction (2026-11-19)
+
+Search links now omit directory markers and terminal legal text, and Indeed no
+longer forces the full legal employer name into exact-name quotes. The directory
+table exposes the shorter search name. A saved per-company search-name editor
+applies to both job boards, exports, and provider queries while preserving the
+directory identity and strict employer-review checks. BCS Technology PTY. LTD.
+Philippines - ROHQ * now searches as BCS Technology. Broad result counts are not
+treated as matched-company vacancy counts.
+
+Verification: all 64 Python tests passed, including BCS query cleanup, custom
+search-name persistence, and preservation of distinct employer identities. The
+running app was restarted and its updated desktop render inspected.
+
+---
+
 # FEU partner job matcher (2026-11-19)
 
 Added a separate matcher workspace with directory/search-link, discovered-posting,

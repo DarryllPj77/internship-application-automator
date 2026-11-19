@@ -64,24 +64,35 @@ def partner_snapshot(rows, *, source_url: str, worksheet: str, first_data_row=4,
     return result
 
 
-def search_links(name: str, term="C#", location="Philippines") -> dict:
+def suggested_search_name(name: str) -> str:
+    """Shorten search terms only; never change the directory identity or match rules."""
+    value = re.sub(r'[*†‡]+', '', name).replace('"', '').strip()
+    value = re.sub(r"\s*[-–—,]?\s*\b(?:ROHQ|regional operating headquarters)\b\.?\s*$", "", value, flags=re.I).strip()
+    value = re.sub(r"(?:[\s,.]+(?:pty|ltd|limited|inc|incorporated|corp|corporation|llc|plc|opc|co|company)\.?)+(?:\s+philippines)?\s*$", "", value, flags=re.I).strip(" ,.-")
+    return re.sub(r"\s+", " ", value) or name.strip()
+
+
+def search_links(name: str, term="C#", location="Philippines", *, search_name=None) -> dict:
     if term not in ("C#", ".NET", "ASP.NET"):
         raise ValueError("Unknown technology search")
+    query_name = search_name.strip() if search_name else suggested_search_name(name)
     return {
-        "Indeed search": "https://ph.indeed.com/jobs?" + urlencode({"q": f'"{name}" {term}', "l": location}),
-        "JobStreet search": "https://ph.jobstreet.com/jobs?" + urlencode({"keywords": f'{name} {term}', "where": location})}
+        "Indeed search": "https://ph.indeed.com/jobs?" + urlencode({"q": f'{query_name} {term}', "l": location}),
+        "JobStreet search": "https://ph.jobstreet.com/jobs?" + urlencode({"keywords": f'{query_name} {term}', "where": location})}
 
 
-def export_searches(partners, location="Philippines") -> bytes:
+def export_searches(partners, location="Philippines", search_names=None) -> bytes:
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["company", "source_rows", "C# Indeed search", "C# JobStreet search", ".NET Indeed search", ".NET JobStreet search"])
+    writer.writerow(["company", "source_rows", "search_name", "C# Indeed search", "C# JobStreet search", ".NET Indeed search", ".NET JobStreet search"])
     for partner in partners:
         # Guard spreadsheet formula execution in exported company cells.
         name = partner["name"]
         safe_name = "'" + name if name.lstrip().startswith(("=", "+", "-", "@")) else name
-        writer.writerow([safe_name, ", ".join(map(str, partner["source_rows"])),
-            *search_links(name, "C#", location).values(), *search_links(name, ".NET", location).values()])
+        query_name = (search_names or {}).get(partner.get("id"), suggested_search_name(name))
+        safe_query = "'" + query_name if query_name.lstrip().startswith(("=", "+", "-", "@")) else query_name
+        writer.writerow([safe_name, ", ".join(map(str, partner["source_rows"])), safe_query,
+            *search_links(name, "C#", location, search_name=query_name).values(), *search_links(name, ".NET", location, search_name=query_name).values()])
     return output.getvalue().encode("utf-8-sig")
 
 
@@ -111,8 +122,8 @@ def classify(title: str, evidence: str) -> str:
     return role_type + " · " + language
 
 
-def search_query(name: str, location: str) -> str:
-    safe = re.sub(r'["\r\n]', " ", name)[:200]
+def search_query(name: str, location: str, search_name=None) -> str:
+    safe = re.sub(r'["\r\n]', " ", search_name or suggested_search_name(name))[:200]
     return f'"{safe}" ("C#" OR "Csharp" OR ".NET" OR "ASP.NET") (site:ph.indeed.com OR site:ph.jobstreet.com) {location[:100]}'
 
 
@@ -227,6 +238,17 @@ class MatcherStore:
                 if previous and previous.get("verification") != "unreviewed":
                     continue
                 state["leads"][lead["id"]] = lead
+        self.mutate(update)
+
+    def set_search_name(self, revision: str, partner_id: str, value: str):
+        value = re.sub(r"\s+", " ", value).strip()
+        if not value or len(value) > 200:
+            raise ValueError("Use a search name between 1 and 200 characters")
+        def update(state):
+            directory = state.get("directory")
+            if not directory or directory["revision"] != revision or partner_id not in {p["id"] for p in directory["partners"]}:
+                raise QueueConflict("Partner directory changed; reopen the search-name editor")
+            state.setdefault("search_names", {})[partner_id] = value
         self.mutate(update)
 
     def review(self, lead_id: str, changes: LeadReview, expected: dict):

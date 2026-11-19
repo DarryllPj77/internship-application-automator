@@ -397,6 +397,14 @@ agreement. Keep the source tab and its date in mind when applying.
 3. Choose **C#**, **.NET**, or **ASP.NET** and a location. Each row opens the
    corresponding company-specific Indeed or JobStreet search. These are search
    links, not verified vacancies; each job board controls its search behavior.
+   Searches use shortened names: directory markers and trailing legal text such
+   as `PTY. LTD. Philippines - ROHQ *` are omitted, and Indeed queries are not
+   forced into exact-name quotes. The original directory identity is preserved.
+   If a search is still too restrictive, open **Adjust a company's search name**,
+   choose the company, edit **Job-board search name**, and save. The saved search
+   name applies to both boards, CSV exports, and future provider searches; it
+   never approves a different employer as the same partner. Job boards may show
+   broader fallback results, so verify the employer on each specific posting.
 4. **Download all partner search links (CSV)** exports the complete loaded list
    with both C# and .NET searches on both boards, even if the table is filtered.
 

@@ -11,7 +11,7 @@ from streamlit.testing.v1 import AppTest
 
 from partner_matcher import (normalize_company, employer_matches, partner_snapshot, search_links,
     export_searches, canonical_posting, classify, leads_from_results, MatcherStore,
-    LeadReview, BraveSearch, SearchFailure, search_query)
+    LeadReview, BraveSearch, SearchFailure, search_query, suggested_search_name)
 from core import CompanyStore, atomic_text
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,11 +43,11 @@ class PartnerMatchingTests(unittest.TestCase):
     def test_search_links_encode_csharp_and_export_all_companies(self):
         links = search_links("A & B #1", "C#")
         query = parse_qs(urlsplit(links["Indeed search"]).query)
-        self.assertEqual(query["q"], ['"A & B #1" C#'])
+        self.assertEqual(query["q"], ['A & B #1 C#'])
         self.assertEqual(urlsplit(links["JobStreet search"]).fragment, "")
         rows = list(csv.reader(io.StringIO(export_searches(directory()["partners"]).decode("utf-8-sig"))))
         self.assertEqual(len(rows), 4)
-        self.assertEqual(len(rows[0]), 6)
+        self.assertEqual(len(rows[0]), 7)
         unsafe = [{"name": "=CMD()", "source_rows": [4]}]
         self.assertTrue(list(csv.reader(io.StringIO(export_searches(unsafe).decode("utf-8-sig"))))[1][0].startswith("'="))
 
@@ -59,6 +59,28 @@ class PartnerMatchingTests(unittest.TestCase):
         self.assertEqual(canonical_posting("https://ph.jobstreet.com/job/123456?tracking=anything"),
                          ("https://ph.jobstreet.com/job/123456", "JobStreet"))
         self.assertEqual(canonical_posting(result()["url"])[0], "https://ph.indeed.com/viewjob?jk=abc123def456")
+
+    def test_legal_directory_name_is_shortened_for_search_only(self):
+        original = "BCS Technology PTY. LTD. Philippines - ROHQ *"
+        self.assertEqual(suggested_search_name(original), "BCS Technology")
+        self.assertEqual(parse_qs(urlsplit(search_links(original)["Indeed search"]).query)["q"], ["BCS Technology C#"])
+        self.assertIn('"BCS Technology"', search_query(original, "Philippines"))
+        self.assertFalse(employer_matches(original, "BCS Information Technology Corp."))
+        self.assertEqual(suggested_search_name("ABC Philippines"), "ABC Philippines")
+
+    def test_custom_search_name_persists_without_changing_partner_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = MatcherStore(Path(temporary) / "matches.json")
+            snapshot = directory()
+            store.set_directory(snapshot)
+            partner = snapshot["partners"][0]
+            store.set_search_name(snapshot["revision"], partner["id"], "Software Brand")
+            state = store.load()
+            self.assertEqual(state["search_names"][partner["id"]], "Software Brand")
+            self.assertEqual(state["directory"], snapshot)
+            self.assertIn("Software Brand C#", parse_qs(urlsplit(search_links(partner["name"], search_name="Software Brand")["Indeed search"]).query)["q"])
+            with self.assertRaises(ValueError):
+                store.set_search_name("stale", partner["id"], "Other")
 
     def test_internship_title_and_language_mentions_are_not_overclaimed(self):
         self.assertIn("Internship/OJT lead", classify("Software Intern", "C#"))

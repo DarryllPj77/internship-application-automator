@@ -9,7 +9,7 @@ import streamlit as st
 from dotenv import dotenv_values
 
 from partner_matcher import (MatcherStore, partner_snapshot, search_links, export_searches,
-    BraveSearch, configured_search_key, search_query, leads_from_results, LeadReview, SearchFailure)
+    BraveSearch, configured_search_key, search_query, leads_from_results, LeadReview, SearchFailure, suggested_search_name)
 from sheets_client import SheetsReader, spreadsheet_reference
 
 
@@ -78,13 +78,29 @@ def _directory(root, store, state, disabled):
     location = st.text_input("Search location", value="Philippines", key="matcher_location", max_chars=100)
     name_filter = st.text_input("Filter partner names", key="matcher_company_filter")
     partners = [p for p in directory["partners"] if name_filter.casefold() in p["name"].casefold()]
+    search_names = state.get("search_names", {})
+    with st.expander("Adjust a company's search name"):
+        by_id = {p["id"]: p for p in directory["partners"]}
+        identity = st.selectbox("Company to adjust", list(by_id), format_func=lambda k: by_id[k]["name"], disabled=disabled)
+        partner = by_id[identity]
+        with st.form(f"search_name_{identity}"):
+            query_name = st.text_input("Job-board search name", value=search_names.get(identity, suggested_search_name(partner["name"])), max_chars=200, disabled=disabled)
+            st.caption("Use the employer's searchable brand name. This only broadens discovery; it does not establish that another employer is the same FEU partner.")
+            if st.form_submit_button("Save search name", disabled=disabled):
+                try:
+                    store.set_search_name(directory["revision"], identity, query_name)
+                    st.session_state.matcher_notice = "Updated search links. The original directory name and employer-verification rules were preserved."
+                    st.rerun()
+                except (ValueError, OSError) as exc:
+                    st.error(str(exc))
     st.caption("These links open company-specific searches, not verified vacancies. Try .NET as well as C#; a .NET role does not necessarily use C#. On narrow screens, scroll the table horizontally to reach the links.")
-    rows = [{"Company": p["name"], "Directory rows": ", ".join(map(str, p["source_rows"])),
-             **search_links(p["name"], term, location)} for p in partners]
+    st.caption("Search names omit legal suffixes and directory markers. Job boards may show broader results; always check the employer on each posting.")
+    rows = [{"Company": p["name"], "Search name": search_names.get(p["id"], suggested_search_name(p["name"])), "Directory rows": ", ".join(map(str, p["source_rows"])),
+             **search_links(p["name"], term, location, search_name=search_names.get(p["id"]))} for p in partners]
     st.dataframe(rows, hide_index=True, width="stretch", height=400,
         column_config={"Indeed search": st.column_config.LinkColumn("Indeed search", display_text="Search Indeed"),
                        "JobStreet search": st.column_config.LinkColumn("JobStreet search", display_text="Search JobStreet")})
-    st.download_button("Download all partner search links (CSV)", export_searches(directory["partners"], location),
+    st.download_button("Download all partner search links (CSV)", export_searches(directory["partners"], location, search_names),
                        file_name="feu-partner-job-searches.csv", mime="text/csv")
     st.caption(f"Showing {len(partners)} of {len(directory['partners'])} partners. The download includes all partners and both C# and .NET searches.")
 
@@ -97,7 +113,8 @@ def _postings(root, store, state, disabled):
     partners = directory["partners"]
     by_id = {p["id"]: p for p in partners}
     location = st.session_state.get("matcher_location", "Philippines")
-    searched = {key for key, value in state["searches"].items() if key in by_id and value["query"] == search_query(by_id[key]["name"], location)}
+    search_names = state.get("search_names", {})
+    searched = {key for key, value in state["searches"].items() if key in by_id and value["query"] == search_query(by_id[key]["name"], location, search_names.get(key))}
     st.caption(f"Coverage for this location: {len(searched)} / {len(partners)} companies searched. Each search checks up to 10 indexed results; this cannot establish that no vacancies exist.")
     key = configured_search_key(root)
     if not key:
@@ -117,7 +134,7 @@ def _postings(root, store, state, disabled):
         completed = 0
         for i, identity in enumerate(targets):
             partner = by_id[identity]
-            query = search_query(partner["name"], location)
+            query = search_query(partner["name"], location, search_names.get(identity))
             try:
                 results = client.search(query)
                 leads = leads_from_results(partner, results)
