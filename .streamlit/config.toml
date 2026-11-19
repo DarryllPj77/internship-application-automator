@@ -6,13 +6,13 @@ maxUploadSize = 20
 
 [theme]
 base = "light"
-primaryColor = "#2563EB"
-backgroundColor = "#CBD5E1"
-secondaryBackgroundColor = "#F1F5F9"
-textColor = "#0F172A"
-borderColor = "#94A3B8"
-dataframeHeaderBackgroundColor = "#F1F5F9"
-dataframeBorderColor = "#94A3B8"
+primaryColor = "#059669"
+backgroundColor = "#D1FAE5"
+secondaryBackgroundColor = "#F4FBF8"
+textColor = "#064E3B"
+borderColor = "#A7F3D0"
+dataframeHeaderBackgroundColor = "#F4FBF8"
+dataframeBorderColor = "#A7F3D0"
 showWidgetBorder = true
 baseRadius = "0.5rem"
 font = "Inter"

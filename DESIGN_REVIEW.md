@@ -1,3 +1,34 @@
+# Latest surface update: Mint Green (2026-11-19)
+
+Current tokens supersede historical palettes below: #D1FAE5 canvas,
+#ECFDF5 panels/modals, #F4FBF8 nested fields/table headers/email previews,
+#A7F3D0 borders, #064E3B primary text, and #374151 metadata.
+Actions use #059669 with #047857 hover; selected rows use 60% seafoam tint
+and a 2px emerald edge. Error and destructive actions retain rose semantics.
+
+Verification: inspected desktop (1440px) and phone (390px) screenshots;
+10 Node table tests passed. Of 36 Python tests, 35 passed; the existing
+dashboard-preview test assumes live sample companies, but companies.json is
+currently empty, so it cannot find its selector. User data was not changed.
+Whitespace checks passed. The broader marketing-page gate was not rerun for
+this scoped token update; earlier results below remain historical.
+
+---
+
+# Latest surface update: stepped gray-on-gray (2026-11-18)
+
+Current tokens supersede historical palettes below: #CBD5E1 canvas,
+#E2E8F0 cards/modals, #F1F5F9 nested inputs/previews, #94A3B8 borders,
+#0F172A primary text, and #334155 metadata. Corporate Cobalt actions remain.
+Primary button labels use the frost token to retain contrast without pure white.
+
+Verification: 21 Python and 5 Node table tests passed; whitespace checks passed;
+the updated desktop render was inspected. No pure-white definitions remain in
+the app theme or custom UI styles. The broader marketing-page gate was not rerun
+for this surface-token update; earlier gate results below are historical.
+
+---
+
 # Latest surface update: Crisp Slate (2026-11-18)
 
 The latest requested surfaces supersede the history below: #F8FAFC canvas,

@@ -260,8 +260,8 @@ Run tests without Gmail credentials or any real email calls:
 node --test tests/company_table.test.cjs
 ```
 
-The light theme uses stepped gray surfaces (#CBD5E1 canvas, #E2E8F0 cards,
-#F1F5F9 inputs and previews, #94A3B8 borders), Corporate Cobalt accents, and four semantic status
+The light theme uses mint surfaces (#D1FAE5 canvas, #ECFDF5 cards,
+#F4FBF8 inputs and previews, #A7F3D0 borders), Deep Emerald accents, and four semantic status
 palettes. Company fields save on blur or Enter; the table supports search, page
 sizes, and selecting the visible page. Selections are retained across searches
 and pages. Template and Email preview tabs share one writing panel. Reduced-motion
