@@ -52,6 +52,7 @@ class ResumeSkillTests(unittest.TestCase):
         self.assertEqual(match_required_skills(available, "C#, Azure (preferred)"), [])
         self.assertEqual(match_required_skills(available, "C# required, Azure optional"), ["C#"])
         self.assertEqual(match_required_skills(available, "C# not required"), [])
+        self.assertEqual(match_required_skills(available, "- Required skills:\n- C#\n- Preferred experience:\n- Azure"), ["C#"])
 
     def test_unreadable_and_scanned_pdf_provide_manual_fallback_errors(self):
         with self.assertRaises(ValueError):

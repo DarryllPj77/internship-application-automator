@@ -243,7 +243,7 @@ def main():
                     name = st.text_input("Company name", key="new_company_name", disabled=job_running)
                     email = st.text_input("HR email", key="new_company_email", disabled=job_running)
                     contact = st.text_input("Contact person", value="Hiring Team", key="new_company_contact", disabled=job_running)
-                    skills = relevant_skills_picker(ROOT, "new_company_skills", disabled=job_running)
+                    skills = relevant_skills_picker(ROOT, "new_company_skills", disabled=job_running, company_name=name)
                     if st.button("Add Company", disabled=job_running):
                         try:
                             company = Company(company_name=name, hr_email=email, contact_person=contact, relevant_skills=skills)

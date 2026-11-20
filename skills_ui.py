@@ -6,6 +6,8 @@ import streamlit as st
 from dotenv import dotenv_values
 
 from resume_skills import pdf_skills, match_required_skills
+from requirements_ui import requirements_finder, evidence_label
+from partner_matcher import normalize_company
 
 
 @st.cache_data(show_spinner=False, max_entries=12)
@@ -29,7 +31,7 @@ def _match(key, available):
     st.session_state[key + "_matched"] = True
 
 
-def relevant_skills_picker(root: Path, key: str, *, label="Relevant skills", disabled=False):
+def relevant_skills_picker(root: Path, key: str, *, label="Relevant skills", disabled=False, company_name="", requirements_prefill=None):
     candidates = []
     selected_cv = st.session_state.get("cv_path") or dotenv_values(root / ".env").get("CV_FILE_PATH") or os.getenv("CV_FILE_PATH", "")
     if selected_cv:
@@ -62,6 +64,27 @@ def relevant_skills_picker(root: Path, key: str, *, label="Relevant skills", dis
     chosen = st.session_state.get(key + "_selected", [])
     if any(skill not in available for skill in chosen):
         st.session_state[key + "_selected"] = [skill for skill in chosen if skill in available]
+    context = normalize_company(company_name)
+    previous_context = st.session_state.get(key + "_company_context")
+    if previous_context and previous_context != context and st.session_state.get(key + "_requirements_origin"):
+        for suffix in ("_requirements", "_text"):
+            st.session_state[key + suffix] = ""
+        st.session_state[key + "_selected"] = []
+        st.session_state.pop(key + "_requirements_origin", None)
+    st.session_state[key + "_company_context"] = context
+    reviewed = requirements_finder(root, key + "_finder", company_name, disabled=disabled)
+    reviewed = reviewed or requirements_prefill
+    if reviewed and normalize_company(reviewed["company_name"]) == context and st.session_state.get(key + "_requirements_origin") != reviewed["review_id"]:
+        st.session_state[key + "_requirements"] = reviewed["text"]
+        st.session_state[key + "_requirements_origin"] = reviewed["review_id"]
+        st.session_state[key + "_requirements_evidence"] = reviewed
+        if available:
+            _match(key, available)
+    origin = st.session_state.get(key + "_requirements_evidence")
+    if origin and st.session_state.get(key + "_requirements_origin"):
+        st.link_button("Applied requirements source", origin["url"])
+        st.text("Reviewed role: " + origin["title"])
+        st.caption(f"{evidence_label(origin['evidence_type'])} · Reviewed {origin['reviewed_at']}. Final requirements and skills remain editable.")
     st.text_area("Required skills / job requirements", key=key + "_requirements", height=100, disabled=disabled,
                  help="Paste the required-skills section of the posting. Company names alone cannot identify requirements.")
     st.button("Select matching resume skills", key=key + "_match", disabled=disabled or not available,

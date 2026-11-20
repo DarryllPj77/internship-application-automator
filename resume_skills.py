@@ -92,10 +92,11 @@ def match_required_skills(available: list[str], requirements: str) -> list[str]:
     optional = False
     for line in requirements.splitlines():
         line = line.strip()
-        if re.match(r"^(?:nice.to.have|preferred(?: qualifications| skills)?|optional(?: skills)?|bonus)(?:\s*[:\-]|\s*$)", line, re.I):
+        heading = re.sub(r"^[#*•\-–—]+\s*", "", line)
+        if re.match(r"^(?:nice.to.have|preferred(?: qualifications| skills| experience)?|optional(?: skills)?|bonus)(?:\s*[:\-]|\s*$)", heading, re.I):
             optional = True
             continue
-        if re.match(r"^(?:required(?: skills| qualifications)?|requirements|must.have|minimum qualifications)(?:\s*[:\-]|\s*$)", line, re.I):
+        if re.match(r"^(?:required(?: skills| qualifications)?|requirements|must.have|minimum qualifications)(?:\s*[:\-]|\s*$)", heading, re.I):
             optional = False
         if optional:
             continue

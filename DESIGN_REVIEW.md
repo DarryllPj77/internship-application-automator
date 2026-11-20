@@ -1,3 +1,24 @@
+# Company requirements search (2026-11-20)
+
+Added role/location/source search for selected partners and company-entry skills
+pickers using the existing search API adapter. Specific JobStreet/LinkedIn/Indeed
+posting links and public career pages are presented as candidates. Excerpts,
+structured qualifications, extracted sections, and manual text remain distinct.
+The user reviews employer and requirements before applying a source. Public
+career-page reading uses existing network safeguards; job-board account pages
+are not fetched. Applied sources fill requirements and intersect detected CV
+skills, preserving manual edits and clearing old automatic context on a company
+change. Source records are private local state.
+
+Verification: all 92 Python tests and 10 Node table tests passed, including source
+classification, multi-job rejection, optional-block extraction, company review,
+skills application, company switches, and matcher-to-target handoff. Search API
+calls were mocked because no live key is configured; no live search or new queue
+entry was represented as completed. Desktop/mobile entry renders were checked
+separately. The existing marketing-page gate results below remain historical.
+
+---
+
 # Resume skill picker (2026-11-20)
 
 Added the same CV skills dropdown, optional required-text matcher, and editable

@@ -469,6 +469,61 @@ The existing generic `software development` fallback still applies if the final
 skills text is left blank. To use the new PDF reader after updating, run
 `python -m pip install -r requirements.txt` in your virtual environment.
 
+### Automatically find company job requirements
+
+Open [the company requirements finder](http://127.0.0.1:8501/?matcher=1&requirements=1).
+It appears below **Partner to add** in the matcher and inside the resume skills
+picker when **Add company** has a company name. No job-board account connection
+is required. The existing Brave Search API key is required for a live search:
+
+```dotenv
+BRAVE_SEARCH_API_KEY='your-key-here'
+```
+
+Get a key through the [Brave Search API dashboard](https://api-dashboard.search.brave.com/),
+reviewing the provider's current plans yourself. Save it only in local `.env`;
+the app does not create a paid account, display the key, or commit it. A missing
+key disables live search while allowing existing results and manual input.
+
+1. Filter/select your company, then expand **Find company job requirements**.
+2. Enter a role and location. Choose **Company career pages**, **JobStreet**,
+   **LinkedIn**, and/or **Indeed**. Click **Search company job requirements**.
+   Each click makes one provider request, returning at most 10 indexed results.
+   Searches use the company's shortened/custom search name and your role, without
+   forcing a C# filter. Resume text, selected CV skills, and HR contacts are not sent.
+3. Choose **Posting to inspect for requirements** and open its source. Specific
+   posting URLs are distinguished from search-result pages. Results are candidates,
+   not confirmed employer matches or proof that a vacancy remains open.
+4. For an accessible public career posting, click **Read full posting requirements**.
+   The reader uses a single JobPosting object's qualifications or an explicit
+   requirements section, retaining title, employer, URL, and available dates.
+   Pages containing multiple JobPosting objects require a more specific source.
+   Requests reuse the public-IP/HTTPS/redirect safeguards of the posting reader.
+5. LinkedIn, Indeed, and JobStreet results are labelled **Search excerpt only —
+   incomplete**. The app does not fetch their account pages or bypass blocking.
+   You can open the posting and use **Full posting text (optional)** plus
+   **Extract requirements from pasted text**. Blocked or unreadable career pages
+   have the same manual fallback; omitted requirements are never invented.
+6. Edit **Review requirements to use**, confirm the employer, qualifications, and
+   availability, then click **Use reviewed requirements**. Excerpts remain labelled
+   as excerpts, even after review. Structured qualifications, extracted sections,
+   pasted text, and user-edited text retain distinct evidence labels.
+7. In a skills picker, applying the source fills the requirements text and selects
+   only its keyword matches from the readable CV's detected skills. Without a CV,
+   it fills requirements and leaves skills for manual selection. Both fields remain
+   editable. A source reviewed in the matcher is carried into the subsequent target
+   review when **Add to Target Companies** is opened. Applying the same source
+   does not repeatedly overwrite your edits on ordinary reruns. Changing the
+   company clears previously auto-applied requirements and skill suggestions.
+
+Searches, extracted requirements, and reviewed source records are kept atomically
+in ignored `.local/company-requirements.json`, including read/review timestamps.
+Search failures do not turn cached results into new results; their old timestamps
+remain visible. Source review alone does not add a target, draft an email, or send
+anything. Saving the target is a separate existing action.
+
+API details: [Brave Web Search and extra snippets](https://api-dashboard.search.brave.com/documentation/services/web-search).
+
 The connected personal sheet was loaded into the private local matcher snapshot
 during setup. Use the load controls to refresh it or switch tabs. Your personal
 copy does not automatically follow updates in the school's original Excel file.

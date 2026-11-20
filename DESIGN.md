@@ -35,6 +35,13 @@ keys instead of batched forms so selection callbacks can update the skills text
 without dropping typed recipient details. CV skill suggestions remain independent
 of the email attachment choice. The existing mint theme applies throughout.
 
+A Find company job requirements expander is available for the matcher's selected
+partner and both skill-entry paths. A role/location/source search leads to a
+specific posting, source evidence, editable requirement text, and an explicit
+review action. Search excerpts are visually distinct from full posting sections;
+missing API access is visible beside a disabled search button. Reviewed sources
+flow into the CV-skill intersection without claiming every resume skill is needed.
+
 Equal outer edges, pale mint panels, 8px corners, 20-24px card padding, 16-24px grid gaps, and
 hairline borders establish the hierarchy. Status counts use tabular mono figures.
 The current palette uses Soft Mint Green (#D1FAE5) for the canvas,

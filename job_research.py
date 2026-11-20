@@ -30,7 +30,7 @@ TECHNOLOGIES = {
 }
 
 
-def fetch_public_posting(url: str) -> tuple[str, str]:
+def fetch_public_posting(url: str, *, blocked_domains=()) -> tuple[str, str]:
     """HTTPS only. Pin each connection to a validated public IP, including redirects."""
     current = url.strip()
     for _ in range(5):
@@ -38,8 +38,8 @@ def fetch_public_posting(url: str) -> tuple[str, str]:
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.port not in (None, 443):
             raise ValueError("Automatic fetching accepts public HTTPS posting URLs on port 443 only")
         host = parsed.hostname
-        if any(host == domain or host.endswith("." + domain) for domain in ("linkedin.com", "jobstreet.com", "jobstreet.com.ph")):
-            raise ValueError("Paste the posting text for LinkedIn/JobStreet; automated account scraping is not used")
+        if any(host == domain or host.endswith("." + domain) for domain in ("linkedin.com", "jobstreet.com", "jobstreet.com.ph", *blocked_domains)):
+            raise ValueError("Automatic full-page reading is disabled for this job board. Open the source and paste its required qualifications")
         addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
         ips = [address[4][0] for address in addresses]
         if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):

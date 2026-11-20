@@ -15,6 +15,7 @@ from sheets_client import SheetsReader, spreadsheet_reference
 from core import CompanyStore
 from partner_targets import partner_contacts, add_partner_target
 from skills_ui import relevant_skills_picker
+from requirements_ui import requirements_finder
 
 
 def render_matcher(root: Path, *, disabled=False):
@@ -119,6 +120,10 @@ def _target_company(root, matcher_store, directory, partners, disabled):
     by_id = {p["id"]: p for p in partners}
     identity = st.selectbox("Partner to add", list(by_id), format_func=lambda k: by_id[k]["name"],
                             key="matcher_target_partner", disabled=locked)
+    reviewed = requirements_finder(root, "partner_requirements_" + identity, by_id[identity]["name"],
+        search_name=matcher_store.load().get("search_names", {}).get(identity, ""), disabled=locked)
+    if reviewed:
+        st.session_state["partner_requirements_choice_" + identity] = reviewed
     if st.button("Add to Target Companies", type="primary", disabled=locked):
         try:
             with st.spinner("Loading the partner's current contacts…"):
@@ -157,7 +162,8 @@ def _target_company(root, matcher_store, directory, partners, disabled):
         person = st.text_input("Target contact person", value=contact.get("contact_person", "Hiring Team"), key=prefix + "_person", disabled=locked)
         email = st.text_input("Target HR email", value=contact.get("hr_email", ""), key=prefix + "_email", disabled=locked)
         position = st.text_input("Target POC position (optional)", value=contact.get("contact_position", ""), key=prefix + "_position", disabled=locked)
-        skills = relevant_skills_picker(root, f"target_skills_{draft['nonce']}", label="Your relevant skills for this company", disabled=locked)
+        skills = relevant_skills_picker(root, f"target_skills_{draft['nonce']}", label="Your relevant skills for this company", disabled=locked,
+            company_name=by_id[identity]["name"], requirements_prefill=st.session_state.get("partner_requirements_choice_" + identity))
         st.caption("Review the recipient and your own skills. Saving adds a Pending row; drafting and sending remain separate actions.")
         if st.button("Save to Target Companies", type="primary", disabled=locked):
             try:
