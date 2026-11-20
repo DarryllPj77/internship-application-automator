@@ -205,11 +205,30 @@ def save_uploaded_cv(directory: Path, filename: str, data: bytes) -> Path:
     return validate_pdf(str(target))
 
 
+def format_skill_list(value: str) -> str:
+    """Add a final conjunction to comma-separated skills without changing stored data."""
+    if "," not in value:
+        return value
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    if not items:
+        return value
+    items[-1] = re.sub(r"^and\s+", "", items[-1], flags=re.I)
+    # Preserve manually written phrases such as 'C#, SQL and database design'.
+    if re.search(r"\band\b", items[-1], re.I):
+        return value
+    if len(items) < 2:
+        return items[0]
+    if len(items) == 2:
+        return " and ".join(items)
+    return ", ".join(items[:-1]) + ", and " + items[-1]
+
+
 def render_template(template: str, company: Company) -> str:
     # Single pass: braces in company data must never introduce substitutions.
+    values = {field: getattr(company, field) for field in FIELDS}
+    values["relevant_skills"] = format_skill_list(company.relevant_skills)
     return PLACEHOLDER.sub(
-        lambda match: getattr(company, match.group()[1:-1], match.group())
-        if match.group()[1:-1] in FIELDS else match.group(), template
+        lambda match: values.get(match.group()[1:-1], match.group()), template
     )
 
 
