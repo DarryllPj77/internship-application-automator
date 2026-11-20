@@ -2,11 +2,15 @@ Dear {contact_person},
 
 Greetings from Green and Gold!
 
-I am Darryll Pajaganas, a 4th-year student from FEU Institute of Technology. I am writing to express my interest in becoming a student intern at {company_name} as a requirement for my undergraduate studies.
+I am Darryll Pajaganas, a 4th-year Bachelor of Science in Computer Science student specializing in Software Engineering at FEU Institute of Technology. I am writing to apply for a software development internship at {company_name} as part of my undergraduate requirements.
 
-I am currently taking a Bachelor of Science in Computer Science specializing in Software Engineering. I am confident that my knowledge and skills in {relevant_skills} can contribute to your company.
+I am required to complete 520 internship hours and am available to start in December 2026. I am also open to a hybrid work arrangement.
 
-Attached is my student resume for your reference. I look forward to hearing from you.
+Through my academic projects, I have gained hands-on experience developing web and desktop applications. My skills in {relevant_skills} would help me contribute to your development team. Our thesis project, which involves a desktop application, has also strengthened my programming, problem-solving, and teamwork skills.
+
+I am particularly interested in software engineering, backend development, and full-stack web development. I hope to learn how professional teams design, build, test, and maintain software while contributing to meaningful development work. I am eager to learn new technologies, adapt to your team's practices, and continue improving my technical skills.
+
+Attached is my resume for your review. I would welcome the opportunity to discuss any suitable internship openings at {company_name}.
 
 Thank you for your time and consideration.
 
@@ -17,4 +21,4 @@ BS Computer Science – Software Engineering
 FEU Institute of Technology
 djpajaganas@fit.edu.ph
 09629973767
-https://darryll.dev
+https://darryll-portfolio.vercel.app
