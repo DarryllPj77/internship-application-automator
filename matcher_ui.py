@@ -11,6 +11,7 @@ from dotenv import dotenv_values
 
 from partner_matcher import (MatcherStore, partner_snapshot, search_links, export_searches,
     BraveSearch, configured_search_key, search_query, leads_from_results, LeadReview, SearchFailure, suggested_search_name)
+from search_providers import provider_picker, search_client
 from sheets_client import SheetsReader, spreadsheet_reference
 from core import CompanyStore
 from partner_targets import partner_contacts, add_partner_target
@@ -84,19 +85,25 @@ def _directory(root, store, state, disabled):
     partners = [p for p in directory["partners"] if name_filter.casefold() in p["name"].casefold()]
     search_names = state.get("search_names", {})
     with st.expander("Adjust a company's search name"):
-        by_id = {p["id"]: p for p in directory["partners"]}
-        identity = st.selectbox("Company to adjust", list(by_id), format_func=lambda k: by_id[k]["name"], disabled=disabled)
-        partner = by_id[identity]
-        with st.form(f"search_name_{identity}"):
-            query_name = st.text_input("Job-board search name", value=search_names.get(identity, suggested_search_name(partner["name"])), max_chars=200, disabled=disabled)
-            st.caption("Use the employer's searchable brand name. This only broadens discovery; it does not establish that another employer is the same FEU partner.")
-            if st.form_submit_button("Save search name", disabled=disabled):
-                try:
-                    store.set_search_name(directory["revision"], identity, query_name)
-                    st.session_state.matcher_notice = "Updated search links. The original directory name and employer-verification rules were preserved."
-                    st.rerun()
-                except (ValueError, OSError) as exc:
-                    st.error(str(exc))
+        if not partners:
+            st.caption("No companies match your filter. Change or clear it to adjust a search name.")
+        else:
+            by_id = {p["id"]: p for p in partners}
+            if st.session_state.get("matcher_adjust_partner") not in by_id:
+                st.session_state.matcher_adjust_partner = next(iter(by_id))
+            identity = st.selectbox("Company to adjust", list(by_id), format_func=lambda k: by_id[k]["name"],
+                                    key="matcher_adjust_partner", disabled=disabled)
+            partner = by_id[identity]
+            with st.form(f"search_name_{identity}"):
+                query_name = st.text_input("Job-board search name", value=search_names.get(identity, suggested_search_name(partner["name"])), max_chars=200, disabled=disabled)
+                st.caption("Use the employer's searchable brand name. This only broadens discovery; it does not establish that another employer is the same FEU partner.")
+                if st.form_submit_button("Save search name", disabled=disabled):
+                    try:
+                        store.set_search_name(directory["revision"], identity, query_name)
+                        st.session_state.matcher_notice = "Updated search links. The original directory name and employer-verification rules were preserved."
+                        st.rerun()
+                    except (ValueError, OSError) as exc:
+                        st.error(str(exc))
     st.caption("These links search by company name only, without added technology keywords. They are not verified vacancies. On narrow screens, scroll the table horizontally to reach the links.")
     st.caption("Search names omit legal suffixes and directory markers. Job boards may show broader results; always check the employer on each posting.")
     rows = [{"Company": p["name"], "Search name": search_names.get(p["id"], suggested_search_name(p["name"])), "Directory rows": ", ".join(map(str, p["source_rows"])),
@@ -118,6 +125,8 @@ def _target_company(root, matcher_store, directory, partners, disabled):
     queue = CompanyStore(root / "companies.json")
     locked = disabled or queue.batch_lock.exists()
     by_id = {p["id"]: p for p in partners}
+    if st.session_state.get("matcher_target_partner") not in by_id:
+        st.session_state.matcher_target_partner = next(iter(by_id))
     identity = st.selectbox("Partner to add", list(by_id), format_func=lambda k: by_id[k]["name"],
                             key="matcher_target_partner", disabled=locked)
     reviewed = requirements_finder(root, "partner_requirements_" + identity, by_id[identity]["name"],
@@ -198,21 +207,27 @@ def _postings(root, store, state, disabled):
     search_names = state.get("search_names", {})
     searched = {key for key, value in state["searches"].items() if key in by_id and value["query"] == search_query(by_id[key]["name"], location, search_names.get(key))}
     st.caption(f"Coverage for this location: {len(searched)} / {len(partners)} companies searched. Each search checks up to 10 indexed results; this cannot establish that no vacancies exist.")
+    provider = provider_picker(root, "matcher_search_provider", disabled=disabled)
     key = configured_search_key(root)
-    if not key:
+    ready = provider != "Brave" or bool(key)
+    if not ready:
         st.info("Automatic discovery needs BRAVE_SEARCH_API_KEY in your local .env. Partner search links remain available without it. See Discovery setup.")
     selected = st.multiselect("Companies to discover (up to 10)", list(by_id),
                              format_func=lambda k: by_id[k]["name"], max_selections=10, disabled=disabled)
     batch_size = st.number_input("Companies per next batch", min_value=1, max_value=10, value=3, step=1, disabled=disabled)
-    st.caption("One provider request per company, no automatic retries. Only company names, C#/.NET keywords, and search location are sent to Brave; HR addresses, CVs, and email bodies are not sent.")
-    run_selected = st.button(f"Discover postings for selected ({len(selected)})", type="primary", disabled=disabled or not selected or not key)
+    st.caption("One provider request per company, no automatic retries. Only company names, C#/.NET keywords, and search location are sent to the selected search provider and its engines; HR addresses, CVs, and email bodies are not sent.")
+    run_selected = st.button(f"Discover postings for selected ({len(selected)})", type="primary", disabled=disabled or not selected or not ready)
     remaining = [p["id"] for p in partners if p["id"] not in searched]
     run_next = st.button(f"Discover next {min(int(batch_size), len(remaining))} unsearched companies",
-                         disabled=disabled or not key or not remaining)
+                         disabled=disabled or not ready or not remaining)
     targets = selected if run_selected else remaining[:int(batch_size)] if run_next else []
     if targets:
         progress = st.progress(0, text="Starting discovery…")
-        client = BraveSearch(key)
+        try:
+            client = search_client(root, provider, brave_key=key)
+        except SearchFailure as exc:
+            st.error(str(exc))
+            return
         completed = 0
         for i, identity in enumerate(targets):
             partner = by_id[identity]
@@ -283,10 +298,12 @@ def _postings(root, store, state, disabled):
 
 
 def _setup(root):
-    st.write("Search links require no API key. Automatic discovery uses Brave Search API, not a direct Indeed or JobStreet account connection.")
+    st.write("Search links require no API key. Automatic discovery supports Brave, SearXNG, or Hybrid routing. These are search services, not job-board account connections.")
     st.link_button("Open Brave Search API setup", "https://api-dashboard.search.brave.com/")
     st.caption("Check the provider's current plans before creating a key. Configure a key locally; don't paste it into chat or commit it to Git.")
     st.code("BRAVE_SEARCH_API_KEY='your-key-here'", language="dotenv")
     st.caption("Add that variable to the project's .env. This panel reads it again on each rerun; refresh the page after saving. Google Sheets authorization does not grant web-search access.")
+    st.code("SEARCH_PROVIDER=Hybrid\nSEARXNG_URL=http://127.0.0.1:8080\nSEARXNG_ENGINES=duckduckgo", language="dotenv")
+    st.caption("For local SearXNG setup, follow the README: run scripts/setup_searxng.py, then Docker Compose. Hybrid routes job-board queries to its braveapi engine; no duplicate direct Brave request is made.")
     st.write("Search key: " + ("Configured locally" if configured_search_key(root) else "Not configured"))
     st.caption("Discovery is limited to 10 companies per button click, with no automatic retries or unattended runs. It stores only leads from specific Indeed/JobStreet posting URLs, never search-result pages. Search snippets may be incomplete, stale, or refer to a related company; review them before applying.")
