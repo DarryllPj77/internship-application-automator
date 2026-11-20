@@ -24,6 +24,7 @@ load_dotenv(ROOT / ".env")
 STORE = CompanyStore(ROOT / "companies.json")
 TEMPLATE = ROOT / "template.txt"
 EMAIL_SETTINGS = ROOT / "email_settings.json"
+FEU_TECH_CC = "sc_ialap@feutech.edu.ph"
 
 st.set_page_config(page_title="Internship Desk · Darryll Pajaganas", page_icon=":material/mail:", layout="wide")
 st.markdown(stylesheet(), unsafe_allow_html=True)
@@ -42,6 +43,21 @@ def reload_table():
 
 def dismiss_confirmation():
     st.session_state.pop("confirmation_job", None)
+
+
+def apply_cc_preset():
+    preset = st.session_state.cc_preset
+    if preset == "FEU Tech · IALAP":
+        current = st.session_state.get("copy_cc", "").strip()
+        addresses = [value.strip().casefold() for value in current.replace(";", ",").split(",")]
+        if FEU_TECH_CC not in addresses:
+            st.session_state.copy_cc = current.rstrip(",; ") + (", " if current else "") + FEU_TECH_CC
+    elif preset == "No CC":
+        st.session_state.copy_cc = ""
+
+
+def mark_custom_cc():
+    st.session_state.cc_preset = "Custom / no preset"
 
 
 def update_uploaded_cv():
@@ -158,8 +174,11 @@ def main():
             if "copy_cc" not in st.session_state:
                 st.session_state.copy_cc = ", ".join(saved_email_settings.cc)
                 st.session_state.copy_bcc = ", ".join(saved_email_settings.bcc)
+            st.selectbox("CC preset", ["Custom / no preset", "FEU Tech · IALAP", "No CC"],
+                         key="cc_preset", on_change=apply_cc_preset, disabled=job_running,
+                         help="FEU Tech adds sc_ialap@feutech.edu.ph to your current CC recipients. No CC clears only the CC field.")
             cc_text = st.text_input("CC recipients (optional)", key="copy_cc", disabled=job_running,
-                                    placeholder="coordinator@example.com, recruiter@example.com")
+                                    placeholder="coordinator@example.com, recruiter@example.com", on_change=mark_custom_cc)
             bcc_text = st.text_input("BCC recipients (optional)", key="copy_bcc", disabled=job_running,
                                      placeholder="Your private copy address, or leave blank")
             copies_valid = True
