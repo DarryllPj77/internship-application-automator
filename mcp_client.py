@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import html
 import os
+import re
 import shutil
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -13,6 +15,19 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from core import SUBJECT, EMAIL, EmailSettings, validate_pdf
+
+
+def email_html(body: str) -> str:
+    """Escape template text and preserve paragraphs without a fixed-width layout."""
+    body = body.replace("\r\n", "\n").replace("\r", "\n")
+    paragraphs = []
+    for paragraph in re.split(r"\n[ \t]*\n", body):
+        escaped = html.escape(paragraph).replace("\n", "<br>")
+        escaped = re.sub(r"https?://[^\s<>]+", lambda m: f'<a href="{m[0]}">{m[0]}</a>', escaped)
+        paragraphs.append('<p style="margin:0 0 16px;">' + escaped + '</p>')
+    return ('<!doctype html><html><head><meta charset="UTF-8"></head><body>'
+            '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;overflow-wrap:break-word;">'
+            + "".join(paragraphs) + '</div></body></html>')
 
 
 class GmailConnection:
@@ -55,6 +70,11 @@ class GmailConnection:
 
     async def deliver(self, mode, payload):
         tool = self.validate_payload(mode, payload)
+        fields = tool.inputSchema.get("properties", {})
+        mime_types = fields.get("mimeType", {}).get("enum", [])
+        if "htmlBody" in fields and "multipart/alternative" in mime_types:
+            payload = {**payload, "htmlBody": email_html(payload["body"]), "mimeType": "multipart/alternative"}
+            self.validate_payload(mode, payload)
         result = await self.session.call_tool(tool.name, arguments=payload)
         content = [block.model_dump(mode="json") for block in result.content]
         summary = json.dumps({"content": content, "structuredContent": result.structuredContent}, ensure_ascii=False)

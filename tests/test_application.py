@@ -15,7 +15,7 @@ from streamlit.testing.v1 import AppTest
 from core import (SUBJECT, Company, CompanyStore, EmailSettings, atomic_text, email_payload,
                   exclusive_lock, import_companies, render_template, run_batch,
                   load_email_settings, save_email_settings, save_uploaded_cv)
-from mcp_client import GmailConnection, GmailMCPClient
+from mcp_client import GmailConnection, GmailMCPClient, email_html
 from ui import preview_metadata, status_pill
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -152,6 +152,35 @@ class ApplicationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             asyncio.run(GmailConnection(session, [tool]).deliver("draft", self.payload()))
         self.assertEqual(session.call_tool.call_args.args[0], "draft_email")
+
+    def test_html_email_escapes_content_and_has_no_fixed_width(self):
+        rendered = email_html('Dear A & B,\n\nA long paragraph <script>alert(1)</script>.\nSignature\nhttps://example.com')
+        self.assertIn('A &amp; B', rendered)
+        self.assertNotIn('<script>', rendered)
+        self.assertIn('&lt;script&gt;', rendered)
+        self.assertIn('<br>Signature', rendered)
+        self.assertIn('<a href="https://example.com">', rendered)
+        self.assertNotIn('max-width', rendered)
+        self.assertNotIn('<pre', rendered)
+
+    def test_transport_adds_html_alternative_only_when_supported(self):
+        original = self.payload()
+        schema = {"type": "object", "additionalProperties": False,
+                  "properties": {key: {} for key in original}}
+        session = SimpleNamespace(call_tool=AsyncMock(return_value=CallToolResult(content=[])))
+        tool = SimpleNamespace(name="draft_email", inputSchema=schema)
+        connection = GmailConnection(session, [tool])
+        asyncio.run(connection.deliver("draft", original))
+        self.assertEqual(session.call_tool.call_args.kwargs['arguments'], original)
+        schema['properties'].update({'htmlBody': {'type': 'string'},
+                                    'mimeType': {'enum': ['text/plain', 'multipart/alternative']}})
+        asyncio.run(connection.deliver("draft", original))
+        delivered = session.call_tool.call_args.kwargs['arguments']
+        self.assertEqual(delivered['mimeType'], 'multipart/alternative')
+        self.assertEqual(delivered['body'], original['body'])
+        self.assertEqual(delivered['attachments'], original['attachments'])
+        self.assertIn('<p ', delivered['htmlBody'])
+        self.assertNotIn('htmlBody', original)
 
     def test_transport_validates_optional_copies_for_drafts_and_sends(self):
         schema = {"type": "object", "properties": {key: {} for key in self.payload()}}
