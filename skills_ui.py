@@ -9,6 +9,16 @@ from resume_skills import pdf_skills, match_required_skills
 from requirements_ui import requirements_finder, evidence_label
 from partner_matcher import normalize_company
 
+SKILL_PRESETS = {
+    "Choose manually": (),
+    "Match job requirements": (),
+    ".NET backend": ("C#", ".NET", "ASP.NET Core", "ASP.NET", "Entity Framework Core", "Dapper", "LINQ", "REST APIs", "SQL", "PostgreSQL", "SQL Server"),
+    ".NET full-stack": ("C#", ".NET", "ASP.NET Core", "MVC", "Razor", "Blazor", "Entity Framework Core", "HTML", "CSS", "JavaScript", "TypeScript", "React", "PostgreSQL", "SQL Server"),
+    "Frontend web": ("HTML", "CSS", "JavaScript", "TypeScript", "React", "Next.js", "Angular", "Vue", "Blazor", "Tailwind CSS", "Bootstrap"),
+    "Database / SQL": ("SQL", "PostgreSQL", "PL/SQL", "SQL Server", "MySQL", "SQLite", "Entity Framework Core", "Dapper"),
+    "Desktop development": ("C#", ".NET", "WPF", "Windows Forms", ".NET MAUI", "SQLite"),
+}
+
 
 @st.cache_data(show_spinner=False, max_entries=12)
 def _read_skills(path: str, modified: int, size: int):
@@ -17,11 +27,25 @@ def _read_skills(path: str, modified: int, size: int):
 
 def _selection_changed(key):
     st.session_state[key + "_text"] = ", ".join(st.session_state.get(key + "_selected", []))
+    st.session_state[key + "_preset"] = "Choose manually"
 
 
 def _resume_changed(key):
     st.session_state[key + "_selected"] = []
     st.session_state[key + "_text"] = ""
+    st.session_state[key + "_preset"] = "Choose manually"
+
+
+def _apply_skill_preset(key, available):
+    preset = st.session_state[key + "_preset"]
+    if preset == "Choose manually":
+        return
+    if preset == "Match job requirements":
+        _match(key, available)
+        return
+    selected = [skill for skill in available if skill in SKILL_PRESETS[preset]]
+    st.session_state[key + "_selected"] = selected
+    st.session_state[key + "_text"] = ", ".join(selected)
 
 
 def _match(key, available):
@@ -94,7 +118,10 @@ def relevant_skills_picker(root: Path, key: str, *, label="Relevant skills", dis
             st.caption("Selected only resume skills mentioned in your supplied requirements. Check the selection before saving.")
         else:
             st.info("No matching required resume skills found. Choose the relevant ones manually or edit the final text.")
+    st.selectbox("Auto-select skills for", list(SKILL_PRESETS), key=key + "_preset",
+                 on_change=_apply_skill_preset, args=(key, tuple(available)), disabled=disabled or not available,
+                 help="Choose a role preset or match the requirements entered above. Only skills detected in your resume are selected. You can adjust the selection below.")
     st.multiselect("Resume skills (choose only relevant ones)", available, key=key + "_selected",
         on_change=_selection_changed, args=(key,), disabled=disabled or not available)
-    st.caption("Starts empty; all resume skills are never added automatically. Changing the selection updates the editable text below. Manual edits remain until you change the selection or run matching again.")
+    st.caption("Choose a preset to fill relevant resume skills, then add or remove any below. Presets are suggestions, not verified company requirements. Your edits stay until you change the selection, choose another preset, or run matching again.")
     return st.text_input(label, key=key + "_text", disabled=disabled)
