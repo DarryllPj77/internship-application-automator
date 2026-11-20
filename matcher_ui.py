@@ -1,8 +1,9 @@
-"""Streamlit partner-job matching workspace; no mail or company-queue writes."""
+"""Partner search and explicit, reviewed additions to the target-company queue."""
 from __future__ import annotations
 
 import os
 import time
+from uuid import uuid4
 from pathlib import Path
 
 import streamlit as st
@@ -11,6 +12,9 @@ from dotenv import dotenv_values
 from partner_matcher import (MatcherStore, partner_snapshot, search_links, export_searches,
     BraveSearch, configured_search_key, search_query, leads_from_results, LeadReview, SearchFailure, suggested_search_name)
 from sheets_client import SheetsReader, spreadsheet_reference
+from core import CompanyStore
+from partner_targets import partner_contacts, add_partner_target
+from skills_ui import relevant_skills_picker
 
 
 def render_matcher(root: Path, *, disabled=False):
@@ -96,12 +100,85 @@ def _directory(root, store, state, disabled):
     st.caption("Search names omit legal suffixes and directory markers. Job boards may show broader results; always check the employer on each posting.")
     rows = [{"Company": p["name"], "Search name": search_names.get(p["id"], suggested_search_name(p["name"])), "Directory rows": ", ".join(map(str, p["source_rows"])),
              **search_links(p["name"], location, search_name=search_names.get(p["id"]))} for p in partners]
-    st.dataframe(rows, hide_index=True, width="stretch", height=400,
+    st.dataframe(rows, hide_index=True, width="stretch", height=min(400, 40 + 35 * max(1, len(rows))),
         column_config={"Indeed search": st.column_config.LinkColumn("Indeed search", display_text="Search Indeed"),
                        "JobStreet search": st.column_config.LinkColumn("JobStreet search", display_text="Search JobStreet")})
+    _target_company(root, store, directory, partners, disabled)
     st.download_button("Download all partner search links (CSV)", export_searches(directory["partners"], location, search_names),
                        file_name="feu-partner-job-searches.csv", mime="text/csv")
     st.caption(f"Showing {len(partners)} of {len(directory['partners'])} partners. The download includes company-name searches for all partners on both boards.")
+
+
+def _target_company(root, matcher_store, directory, partners, disabled):
+    st.markdown("**Add a searched partner to Target Companies**")
+    if not partners:
+        st.caption("Filter the directory to a company you want to add.")
+        return
+    queue = CompanyStore(root / "companies.json")
+    locked = disabled or queue.batch_lock.exists()
+    by_id = {p["id"]: p for p in partners}
+    identity = st.selectbox("Partner to add", list(by_id), format_func=lambda k: by_id[k]["name"],
+                            key="matcher_target_partner", disabled=locked)
+    if st.button("Add to Target Companies", type="primary", disabled=locked):
+        try:
+            with st.spinner("Loading the partner's current contacts…"):
+                rows = SheetsReader().read(directory["source_url"], directory["worksheet"])
+            contacts = partner_contacts(rows, directory, identity)
+            error = ""
+        except Exception as exc:
+            contacts = []
+            error = f"Contacts could not be loaded ({type(exc).__name__}). Check Sheets access or enter a verified recipient manually."
+        st.session_state.matcher_target_draft = {"partner_id": identity, "revision": directory["revision"],
+            "contacts": contacts, "error": error, "nonce": uuid4().hex}
+        st.session_state.pop("confirmation_job", None)
+    draft = st.session_state.get("matcher_target_draft", {})
+    if draft.get("partner_id") != identity or draft.get("revision") != directory["revision"]:
+        return
+    if draft["error"]:
+        st.warning(draft["error"])
+    contacts = draft["contacts"]
+    if not contacts and not draft["error"]:
+        st.info("No POC details were found under recognized email headers. Enter a verified contact below; no address is guessed.")
+    options = list(range(len(contacts))) + [-1]
+    default = next((i for i, c in enumerate(contacts) if c["valid_email"]), 0 if contacts else -1)
+    def contact_label(index):
+        if index == -1:
+            return "Enter contact manually"
+        contact = contacts[index]
+        return f"POC {contact['poc_group']} · {contact['contact_person']} · {contact['hr_email'] or 'Email missing'}"
+    selected = st.selectbox("Recipient / point of contact", options, index=options.index(default),
+        format_func=contact_label, key=f"target_contact_{draft['nonce']}", disabled=locked)
+    contact = contacts[selected] if selected != -1 else {}
+    if contact and not contact["valid_email"]:
+        st.info("This POC has no valid email in the directory. Enter a verified recipient before saving.")
+    with st.container():
+        prefix = f"target_review_{draft['nonce']}_{selected}"
+        st.text_input("Target company name", value=by_id[identity]["name"], disabled=True)
+        person = st.text_input("Target contact person", value=contact.get("contact_person", "Hiring Team"), key=prefix + "_person", disabled=locked)
+        email = st.text_input("Target HR email", value=contact.get("hr_email", ""), key=prefix + "_email", disabled=locked)
+        position = st.text_input("Target POC position (optional)", value=contact.get("contact_position", ""), key=prefix + "_position", disabled=locked)
+        skills = relevant_skills_picker(root, f"target_skills_{draft['nonce']}", label="Your relevant skills for this company", disabled=locked)
+        st.caption("Review the recipient and your own skills. Saving adds a Pending row; drafting and sending remain separate actions.")
+        if st.button("Save to Target Companies", type="primary", disabled=locked):
+            try:
+                current = matcher_store.load().get("directory")
+                if not current or current["revision"] != draft["revision"]:
+                    raise ValueError("Directory changed. Load this partner's contacts again before saving")
+                saved, added = add_partner_target(queue, current, identity,
+                    {**contact, "hr_email": email, "contact_person": person, "contact_position": position},
+                    relevant_skills=skills)
+                st.session_state.preview_company_id = saved.id
+                st.session_state.editor_version = st.session_state.get("editor_version", 0) + 1
+                st.session_state.pop("confirmation_job", None)
+                st.session_state.pop("matcher_target_draft", None)
+                st.session_state.matcher_notice = (f"Added {saved.company_name} to Target Companies as Pending."
+                    if added else f"{saved.hr_email} is already in Target Companies as {saved.status.title()}; its existing details were preserved.")
+                st.rerun()
+            except (ValueError, OSError) as exc:
+                st.error(f"Target company not saved: {exc}")
+    if st.button("Cancel target addition", key=f"cancel_target_{draft['nonce']}", disabled=locked):
+        st.session_state.pop("matcher_target_draft", None)
+        st.rerun()
 
 
 def _postings(root, store, state, disabled):

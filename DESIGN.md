@@ -21,6 +21,20 @@ classifications remain distinct from reviewed role/language fields, and exact
 employer review avoids treating related subsidiaries as the same partner. The
 existing mint surfaces, forest headings, restrained buttons, and focus rings apply.
 
+Below the matcher table, a filtered partner picker and Add to Target Companies
+action load current POCs into an inline review form. Contacts are selected before
+the form so their details can be populated reliably. Source names remain fixed;
+recipient details and applicant skills are editable. Saving gives a Pending
+target and updates the email preview without selecting a recipient for a batch.
+Missing addresses and duplicate queue recipients get explicit feedback.
+
+Company creation and matcher target review share a resume-skill multiselect,
+requirements text area, explicit subset-matching action, and editable final
+wording. No skills are preselected. These entry controls use persistent widget
+keys instead of batched forms so selection callbacks can update the skills text
+without dropping typed recipient details. CV skill suggestions remain independent
+of the email attachment choice. The existing mint theme applies throughout.
+
 Equal outer edges, pale mint panels, 8px corners, 20-24px card padding, 16-24px grid gaps, and
 hairline borders establish the hierarchy. Status counts use tabular mono figures.
 The current palette uses Soft Mint Green (#D1FAE5) for the canvas,

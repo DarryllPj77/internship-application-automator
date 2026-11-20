@@ -17,6 +17,7 @@ from mcp_client import GmailMCPClient
 from ui import company_table, preview_metadata, status_pill, stylesheet
 from sources_ui import render_sources
 from matcher_ui import render_matcher
+from skills_ui import relevant_skills_picker
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -233,18 +234,23 @@ def main():
                 st.error(f"Edits not saved: {exc}")
                 selected = []
             st.caption(f"{len(selected)} selected · {len(companies)} companies · Changes saved automatically")
-            with st.expander("Add company"):
-                with st.form("add_company", clear_on_submit=True):
-                    name = st.text_input("Company name")
-                    email = st.text_input("HR email")
-                    contact = st.text_input("Contact person", value="Hiring Team")
-                    skills = st.text_input("Relevant skills")
-                    if st.form_submit_button("Add Company", disabled=job_running):
+            with st.expander("Add company", expanded=st.query_params.get("skills") == "1"):
+                with st.container():
+                    if st.session_state.pop("new_company_reset", False):
+                        for key in ("new_company_name", "new_company_email", "new_company_contact",
+                                    "new_company_skills_selected", "new_company_skills_text", "new_company_skills_requirements"):
+                            st.session_state.pop(key, None)
+                    name = st.text_input("Company name", key="new_company_name", disabled=job_running)
+                    email = st.text_input("HR email", key="new_company_email", disabled=job_running)
+                    contact = st.text_input("Contact person", value="Hiring Team", key="new_company_contact", disabled=job_running)
+                    skills = relevant_skills_picker(ROOT, "new_company_skills", disabled=job_running)
+                    if st.button("Add Company", disabled=job_running):
                         try:
                             company = Company(company_name=name, hr_email=email, contact_person=contact, relevant_skills=skills)
                             if any(c.hr_email.casefold() == company.hr_email.casefold() for c in companies):
                                 raise ValueError("This HR email already exists")
                             STORE.replace([*companies, company], companies)
+                            st.session_state.new_company_reset = True
                             reload_table()
                         except Exception as exc:
                             st.error(str(exc))

@@ -380,9 +380,9 @@ additional MCP connection to use its built-in directory importer.
 ## FEU Partner Job Matcher
 
 Open [the partner matcher](http://127.0.0.1:8501/?matcher=1), below the status
-counters. This workspace is separate from the email queue: it includes partners
-without HR addresses and never creates drafts, sends emails, or changes applicant
-skills. A row in a selected FEU directory tab is not proof of a current partnership
+counters. It includes partners without HR addresses. Searching and discovery do
+not change the email queue; a separate reviewed action can add a partner to Target
+Companies. No matcher action creates drafts or sends emails. A row in a selected FEU directory tab is not proof of a current partnership
 agreement. Keep the source tab and its date in mind when applying.
 
 ### Partner names and search links (no key needed)
@@ -408,6 +408,66 @@ agreement. Keep the source tab and its date in mind when applying.
    broader fallback results, so verify the employer on each specific posting.
 4. **Download all partner search links (CSV)** exports the complete loaded list
    with company-name searches on both boards, even if the table is filtered.
+
+### Add a searched partner to Target Companies
+
+After searching a company on a job board, return to the matcher and filter its
+partner name. Under the search-link table:
+
+1. Choose **Partner to add** (the first filtered result is selected automatically).
+2. Click **Add to Target Companies**. The app reads the source worksheet and
+   finds that company's current rows by its directory name, not old row numbers.
+3. Choose a **Recipient / point of contact**. Recognized Name/Position/Email header
+   groups populate available POCs; valid-email contacts are preferred initially.
+   If an address is missing or invalid, correct it or enter a contact manually.
+   Addresses are never inferred from company names, and failed Sheets access does
+   not silently import another company's contact.
+4. Review the contact, email, POC title, and **your own relevant skills**, then
+   click **Save to Target Companies**. **Cancel target addition** discards the form.
+
+The target is saved to `companies.json` as **Pending**, with source worksheet,
+current row, and available company metadata. The queue refreshes and the email
+preview points to the saved target. The new row is not automatically selected
+for sending. Existing email addresses are detected case-insensitively; the
+existing row's edits, application status, result, and recovery state are retained.
+Queue batch locks and concurrent-edit checks apply. Sheet reading and opening
+the form alone do not add anything or send an email.
+
+### Resume skills dropdown and required-skill matching
+
+Both **Add company** and the matcher's target review include a shared resume
+skills picker. Choose **CV for skill suggestions**: the selected existing CV is
+preferred, with locally uploaded CVs also available. This choice does not change
+the actual email attachment. Parsing runs locally with `pypdf`; the PDF and its
+text are not sent to an LLM, search provider, or job board.
+
+The picker detects known skill names from a declared Skills / Technical Skills
+section when available; otherwise it checks the readable CV text. Obvious
+Currently Learning entries are excluded. Detection is a bounded keyword list,
+not a complete assessment of proficiency. Scanned, protected, or unreadable PDFs
+show a manual-entry fallback rather than guessed skills. Extraction is limited
+to 20 MB and 20 pages, with only detected skill lists cached in memory.
+
+1. Under **Resume skills (choose only relevant ones)**, select the skills needed
+   for the specific role. Nothing is preselected; all skills are not added by default.
+2. To suggest a subset, paste the posting's required-skills section into
+   **Required skills / job requirements** and click **Select matching resume skills**.
+   It intersects known CV skills with mentions in that text and excludes obvious
+   preferred/optional blocks and negated requirements. Company names alone cannot
+   establish role requirements. Review the results; wording and mixed optional
+   clauses can be ambiguous and this is not a full semantic job-description parser.
+3. Edit the populated **Relevant skills** / **Your relevant skills for this company**
+   text as needed. The final text is what is saved and rendered into emails.
+   Skills missed by detection can be entered manually. Ordinary reruns preserve
+   edits; changing the dropdown selection or running matching explicitly replaces
+   the text. Choosing another CV clears the old automatic selection/text.
+4. Save the company. Only that company's final skills wording is saved; other
+   company rows, applicant details, and the email template are unchanged.
+
+Entry controls preserve company/contact values when a dropdown causes a rerun.
+The existing generic `software development` fallback still applies if the final
+skills text is left blank. To use the new PDF reader after updating, run
+`python -m pip install -r requirements.txt` in your virtual environment.
 
 The connected personal sheet was loaded into the private local matcher snapshot
 during setup. Use the load controls to refresh it or switch tabs. Your personal

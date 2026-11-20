@@ -1,3 +1,43 @@
+# Resume skill picker (2026-11-20)
+
+Added the same CV skills dropdown, optional required-text matcher, and editable
+final skills field to Add company and matcher target review. Suggestions come
+from local PDF text, preferring declared skill sections and excluding obvious
+Currently Learning entries. Initial selection is empty. Matching intersects CV
+skills with supplied requirements; company names are not treated as requirement
+evidence. The final wording remains editable. Typed company/recipient values are
+preserved across selection callbacks. Skills CV selection does not alter the
+email attachment.
+
+Verification: 81 Python tests and 10 Node table tests passed, covering local PDF
+extraction, optional requirements, subset selection, manual edits, and contact
+preservation in both entry paths. An existing uploaded CV was parsed locally;
+no live queue entry was added during verification. Browser renders were checked
+separately. Earlier marketing-page gate results below remain historical.
+
+---
+
+# Partner-to-target workflow (2026-11-20)
+
+The matcher table now leads into a filtered partner picker and Add to Target
+Companies action. The action fetches current worksheet rows, checks the company
+identity rather than relying on stale row numbers, and detects multiple POC
+header groups. A separate inline form reviews recipient, contact title, and
+applicant skills before a Pending row is saved through CompanyStore. Cancel and
+invalid addresses leave the queue unchanged. Duplicate addresses preserve existing
+edits, Sent status, results, and recovery state. Existing batch/concurrency locks
+apply; the queue and preview refresh after a save without selecting mail targets.
+Filtered tables shrink to expose the action below short result sets.
+
+Verification: all 72 Python tests and 10 Node table tests passed, including POC
+selection, missing-email correction, cancellation, duplicates, moved source rows,
+and batch-lock behavior. Live Indra Philippines lookup found a POC at row 512
+with no valid email; no real target was added during verification. The local app
+was restarted. Browser entry renders were checked separately from the isolated
+UI tests; previous marketing-page gate results below remain historical.
+
+---
+
 # Job-board search-name correction (2026-11-19)
 
 Search links now omit directory markers and terminal legal text, and Indeed no
