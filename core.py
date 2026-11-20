@@ -207,6 +207,9 @@ def save_uploaded_cv(directory: Path, filename: str, data: bytes) -> Path:
 
 def format_skill_list(value: str) -> str:
     """Add a final conjunction to comma-separated skills without changing stored data."""
+    # Plain-text mail readers can auto-link dotted names such as ASP.NET.
+    # Use spaces within skill names; keep .NET and numeric versions intact.
+    value = re.sub(r"(?<=[A-Za-z])\.(?=[A-Za-z])", " ", value)
     if "," not in value:
         return value
     items = [item.strip() for item in value.split(",") if item.strip()]
