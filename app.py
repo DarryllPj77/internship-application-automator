@@ -253,6 +253,23 @@ def main():
                 st.error(f"Edits not saved: {exc}")
                 selected = []
             st.caption(f"{len(selected)} selected · {len(companies)} companies · Changes saved automatically")
+            with st.expander("Auto-select skills for queued companies"):
+                st.caption("Check companies in the queue, choose a resume-based skill preset, then review and apply the skills below. This replaces Relevant skills only for the selected companies.")
+                skills_locked = job_running or STORE.batch_lock.exists()
+                queue_skills = relevant_skills_picker(ROOT, "queue_company_skills", disabled=skills_locked)
+                st.caption(f"Apply to {len(selected)} selected companies. You can still edit each row's Relevant skills afterward.")
+                if st.button(f"Apply skills to selected ({len(selected)})", key="apply_queue_skills",
+                             disabled=skills_locked or not selected or not queue_skills.strip()):
+                    try:
+                        selected_id_set = {company.id for company in selected}
+                        updated = [Company.model_validate({**company.model_dump(), "relevant_skills": queue_skills})
+                                   if company.id in selected_id_set else company for company in companies]
+                        STORE.replace(updated, companies)
+                        st.session_state.pop("confirmation_job", None)
+                        st.session_state.sources_notice = f"Updated Relevant skills for {len(selected)} selected companies."
+                        reload_table()
+                    except (ValueError, OSError) as exc:
+                        st.error(f"Skills not saved: {exc}")
             with st.expander("Add company", expanded=st.query_params.get("skills") == "1"):
                 with st.container():
                     if st.session_state.pop("new_company_reset", False):
