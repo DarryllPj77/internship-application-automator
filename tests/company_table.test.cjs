@@ -63,12 +63,58 @@ test('select visible page affects only its rows',()=>{
   assert.equal(table.lastValue().selected_ids[9],'19');
 });
 
+test('rapid checkbox clicks retain highlights through stale renders and acknowledgements',()=>{
+  const table=setup();table.render();
+  const first=table.elements.rows.children[0],second=table.elements.rows.children[1];
+  const firstCheck=first.children[0].children[0].children[0];
+  const secondCheck=second.children[0].children[0].children[0];
+  firstCheck.checked=true;firstCheck.fire('change');
+  secondCheck.checked=true;secondCheck.fire('change');
+  table.render(['0']); // acknowledgement of the earlier click
+  assert.equal(table.elements.selection.textContent,'2 selected');
+  assert.equal(first.classes.has('selected'),true);
+  assert.equal(second.classes.has('selected'),true);
+  assert.equal(table.elements.rows.children[1],second);
+  table.render(['0','1']);
+  assert.equal(table.elements.rows.children[0],first);
+  secondCheck.checked=false;secondCheck.fire('change');
+  assert.equal(second.classes.has('selected'),false);
+  assert.equal(table.elements.selection.textContent,'1 selected');
+  table.render(['0','1','2']); // late server render must not undo unchecking
+  assert.equal(table.elements.selection.textContent,'1 selected');
+  table.render(['0']); // latest selection acknowledged
+  table.render([]); // later authoritative clear is respected
+  assert.equal(table.elements.selection.textContent,'0 selected');
+});
+
 test('inline edits emit the revision and edited field for Python validation',()=>{
   const table=setup();table.render();
   const field=table.elements.rows.children[0].children[2].children[0];
   field.value='new@acme.com';field.fire('change');
   assert.equal(table.lastValue().revision,'v1');
   assert.equal(table.lastValue().rows[0].hr_email,'new@acme.com');
+});
+
+test('status filter combines with text search and selects only matching visible rows',()=>{
+  const table=setup();
+  table.rows[2].status='drafted';table.rows[3].status='failed';
+  table.render();table.elements.next.fire('click');
+  table.elements['status-filter'].value='drafted';table.elements['status-filter'].fire('change');
+  assert.equal(table.elements.range.textContent,'1–1 of 1');
+  assert.equal(table.elements.rows.children[0].children[1].children[0].value,'Company 2');
+  table.elements['select-page'].checked=true;table.elements['select-page'].fire('change');
+  assert.deepEqual([...table.lastValue().selected_ids],['2']);
+  table.elements['status-filter'].value='sent';table.elements['status-filter'].fire('change');
+  assert.equal(table.elements.rows.children[0].children[1].children[0].value,'Company 0');
+  assert.equal(table.elements['select-pending'].disabled,true);
+  table.elements.search.value='No match';table.elements.search.fire('input');
+  assert.equal(table.elements.range.textContent,'0 companies');
+  table.elements.search.value='';table.elements.search.fire('input');
+  table.elements['status-filter'].value='failed';table.elements['status-filter'].fire('change');
+  assert.equal(table.elements.rows.children[0].children[1].children[0].value,'Company 3');
+  table.elements['status-filter'].value='all';table.elements['status-filter'].fire('change');
+  assert.equal(table.elements.range.textContent,'1–10 of 25');
+  assert.equal(table.elements.selection.textContent,'1 selected');
 });
 
 test('frame resize is stable and foreign window messages are ignored',()=>{

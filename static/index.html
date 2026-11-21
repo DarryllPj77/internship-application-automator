@@ -15,7 +15,7 @@ button:hover:not(:disabled) {background:var(--canvas)} button:active:not(:disabl
 input,select {background:var(--inset);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:8px 10px;min-height:36px;max-width:100%}
 input::placeholder {color:var(--muted)} :focus-visible {outline:2px solid rgb(5 150 105 / .25);outline-offset:2px}
 .toolbar {display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}
-.search {width:min(100%,300px)} .count,.pagination {font:12px/1.6 var(--mono);font-variant-numeric:tabular-nums;color:var(--muted)}
+.queue-filters {display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:1}.search {width:min(100%,300px)} .count,.pagination {font:12px/1.6 var(--mono);font-variant-numeric:tabular-nums;color:var(--muted)}
 .table-scroll {overflow-x:auto;border:1px solid var(--border);border-radius:8px;scrollbar-width:thin}
 table {border-collapse:separate;border-spacing:0;width:100%;text-align:left;table-layout:fixed;min-width:700px}
 th {background:var(--inset);color:var(--muted);font-size:11px;font-weight:500;padding:11px 10px;border-bottom:1px solid var(--border)}
@@ -62,7 +62,7 @@ body:has(.standalone) {background:var(--canvas)}
 </head>
 <body>
 <header id="standalone-header" hidden><h1>Company Queue</h1><p>Edit and organize your internship applications. <a href="http://127.0.0.1:8501/">Open the email dashboard</a></p></header>
-<div class="toolbar"><input class="search" id="search" type="search" placeholder="Search companies or email…" aria-label="Search companies"><div class="toolbar-actions"><button id="select-pending">Select all pending</button><span class="count" id="selection" aria-live="polite"></span><button id="bulk-delete" class="danger" hidden>Delete Selected (0)</button></div></div>
+<div class="toolbar"><div class="queue-filters"><input class="search" id="search" type="search" placeholder="Search companies or email…" aria-label="Search companies"><select id="status-filter" aria-label="Filter companies by status"><option value="all">All statuses</option><option value="pending">Pending</option><option value="drafted">Drafted</option><option value="sent">Sent</option><option value="failed">Failed</option></select></div><div class="toolbar-actions"><button id="select-pending">Select all pending</button><span class="count" id="selection" aria-live="polite"></span><button id="bulk-delete" class="danger" hidden>Delete Selected (0)</button></div></div>
 <p id="notice" class="error" role="alert" hidden></p>
 <div class="table-scroll" tabindex="0" aria-label="Editable companies table; scroll horizontally for more columns">
 <table aria-label="Target companies"><thead><tr>
@@ -82,9 +82,9 @@ body:has(.standalone) {background:var(--canvas)}
 // Streamlit's component protocol. Messages are accepted only from this frame's parent.
 const post = (type, extra={}) => window.parent.postMessage({isStreamlitMessage:true,type,...extra}, '*');
 const embedded=window.parent!==window;
-let rows=[], selected=new Set(), revision='', disabled=false, page=0, pageSize=10, signature='', frameHeight=0, modalOpen=false, busy=false, editId=null, deleteIds=[], deleteBulk=false, activePreview=null;
+let rows=[], selected=new Set(), revision='', disabled=false, page=0, pageSize=10, signature='', frameHeight=0, modalOpen=false, busy=false, editId=null, deleteIds=[], deleteBulk=false, activePreview=null, pendingSelection=null;
 const $ = id => document.getElementById(id);
-const emit = () => post('streamlit:setComponentValue', {dataType:'json',value:{revision,rows,selected_ids:[...selected]}});
+const emit = () => {pendingSelection=new Set(selected);post('streamlit:setComponentValue', {dataType:'json',value:{revision,rows,selected_ids:[...selected]}})};
 function resizeFrame() {
   const height=Math.max(Math.ceil(document.body.getBoundingClientRect().height)+2,modalOpen?650:0);
   if(height!==frameHeight) {frameHeight=height;post('streamlit:setFrameHeight',{height})}
@@ -98,9 +98,13 @@ function cellInput(row,field,className) {
   input.addEventListener('change',()=>{row[field]=input.value;emit()});
   return input;
 }
-function paint() {
+function filteredRows() {
+  const status=$('status-filter').value;
   const query=$('search').value.toLocaleLowerCase().trim();
-  const filtered=rows.filter(r=>[r.company_name,r.hr_email,r.contact_person,r.relevant_skills].some(v=>v.toLocaleLowerCase().includes(query)));
+  return rows.filter(r=>(!status||status==='all'||r.status===status)&&[r.company_name,r.hr_email,r.contact_person,r.relevant_skills].some(v=>v.toLocaleLowerCase().includes(query)));
+}
+function paint() {
+  const filtered=filteredRows();
   page=Math.min(page,Math.max(0,Math.ceil(filtered.length/pageSize)-1));
   const visible=filtered.slice(page*pageSize,(page+1)*pageSize), body=$('rows'); body.replaceChildren();
   visible.forEach(row=>{
@@ -130,7 +134,7 @@ function paint() {
 function updateSelection(visible) {
   $('selection').textContent=`${selected.size} selected`;
   $('bulk-delete').hidden=selected.size===0;$('bulk-delete').textContent=`Delete Selected (${selected.size})`;$('bulk-delete').disabled=disabled||busy;
-  $('select-pending').disabled=disabled||busy;
+  $('select-pending').disabled=disabled||busy||!filteredRows().some(r=>r.status==='pending'&&!r.needs_review);
   const checked=visible.filter(r=>selected.has(r.id)).length;
   $('select-page').checked=visible.length>0&&checked===visible.length;$('select-page').indeterminate=checked>0&&checked<visible.length;
   $('select-page').disabled=disabled||!visible.length;
@@ -178,7 +182,7 @@ $('delete-confirm').addEventListener('click',()=>commitAction({type:'delete',ids
 $('edit-cancel').addEventListener('click',()=>closeModal('edit-modal'));$('delete-cancel').addEventListener('click',()=>closeModal('delete-modal'));
 for(const id of ['edit-modal','delete-modal'])$(id).addEventListener('cancel',()=>{modalOpen=false;requestAnimationFrame(resizeFrame)});
 $('bulk-delete').addEventListener('click',e=>{e.stopPropagation();if(!disabled&&!busy)openDelete([...selected],true)});
-$('select-pending').addEventListener('click',()=>{if(disabled||busy)return;selected=new Set(rows.filter(r=>r.status==='pending'&&!r.needs_review).map(r=>r.id));paint();if(embedded)emit()});
+$('select-pending').addEventListener('click',()=>{if(disabled||busy)return;selected=new Set(filteredRows().filter(r=>r.status==='pending'&&!r.needs_review).map(r=>r.id));paint();if(embedded)emit()});
 async function refreshPreview() {
   if(embedded)return;
   activePreview=rows.some(row=>row.id===activePreview)?activePreview:(rows[0]?.id||null);
@@ -190,17 +194,29 @@ async function refreshPreview() {
 }
 $('preview-company').addEventListener('change',()=>{activePreview=$('preview-company').value;refreshPreview().catch(error=>{$('notice').hidden=false;$('notice').textContent=error.message})});
 $('select-page').addEventListener('change',()=>{
-  const query=$('search').value.toLocaleLowerCase().trim();
-  const visible=rows.filter(r=>[r.company_name,r.hr_email,r.contact_person,r.relevant_skills].some(v=>v.toLocaleLowerCase().includes(query))).slice(page*pageSize,(page+1)*pageSize);
+  const visible=filteredRows().slice(page*pageSize,(page+1)*pageSize);
   visible.forEach(row=>$('select-page').checked?selected.add(row.id):selected.delete(row.id));paint();emit();
 });
+$('status-filter').addEventListener('change',()=>{page=0;paint()});
 $('search').addEventListener('input',()=>{page=0;paint()});$('page-size').addEventListener('change',()=>{pageSize=+$('page-size').value;page=0;paint()});
 $('previous').addEventListener('click',()=>{page--;paint()});$('next').addEventListener('click',()=>{page++;paint()});
 window.addEventListener('message',event=>{
   if(event.source!==window.parent||event.data.type!=='streamlit:render')return;
   const args=event.data.args, nextSignature=JSON.stringify([args.rows,args.selected_ids,args.disabled]);
   if(signature===nextSignature)return;signature=nextSignature;
-  rows=args.rows;selected=new Set(args.selected_ids);revision=args.revision;disabled=args.disabled;paint();
+  const sameSelection=(a,b)=>a.size===b.size&&[...a].every(id=>b.has(id));
+  let incoming=new Set(args.selected_ids);
+  // A previous Python rerun can arrive after another local click. Keep the
+  // newest local selection until acknowledged instead of flashing old rows.
+  if(pendingSelection&&revision===args.revision&&!args.disabled) {
+    if(sameSelection(incoming,pendingSelection))pendingSelection=null;
+    else incoming=new Set(pendingSelection);
+  } else pendingSelection=null;
+  const changed=revision!==args.revision||JSON.stringify(rows)!==JSON.stringify(args.rows)||disabled!==args.disabled||!sameSelection(selected,incoming);
+  rows=args.rows;selected=incoming;revision=args.revision;disabled=args.disabled;
+  // Don't replace checkbox DOM nodes for a selection acknowledgement: this
+  // can swallow a second click while the user is selecting several rows.
+  if(changed)paint();
 });
 window.addEventListener('resize',resizeFrame);
 document.fonts.ready.then(resizeFrame);
