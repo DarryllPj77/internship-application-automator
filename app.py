@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import html
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import streamlit as st
@@ -18,6 +18,7 @@ from ui import company_table, preview_metadata, status_pill, stylesheet
 from sources_ui import render_sources
 from matcher_ui import render_matcher
 from skills_ui import relevant_skills_picker
+from sent_checker import check_drafted, apply_sent_checks
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -253,6 +254,50 @@ def main():
                 st.error(f"Edits not saved: {exc}")
                 selected = []
             st.caption(f"{len(selected)} selected · {len(companies)} companies · Changes saved automatically")
+            with st.expander("Check drafted emails sent manually in Gmail"):
+                st.caption("Read Gmail Sent for matching recipients and the fixed application subject, then review matches before updating your queue. Missing drafts are never treated as sent. This does not send emails or prove delivery to an inbox.")
+                drafted = {c.id: c for c in companies if c.status == "drafted" and not c.needs_review}
+                check_ids = st.multiselect("Drafted companies to check (up to 25)", list(drafted),
+                    default=[c.id for c in selected if c.id in drafted][:25],
+                    format_func=lambda identity: drafted[identity].company_name + " · " + drafted[identity].hr_email,
+                    max_selections=25, key="sent_check_companies", disabled=job_running)
+                since = st.date_input("Search Sent after", value=datetime.now().date() - timedelta(days=30),
+                                      key="sent_check_since", disabled=job_running)
+                st.caption("Up to 5 recent candidates per company are inspected. Choose the date before you created the drafts. Older sends with the same recipient and subject can match; review the dates and messages. Use the Gmail account connected through OAuth.")
+                if st.button("Check Gmail Sent", disabled=job_running or STORE.batch_lock.exists() or not check_ids):
+                    st.session_state.pop("sent_check_report", None)
+                    st.session_state.pop("sent_check_reviewed", None)
+                    try:
+                        check_progress = st.progress(0, text="Connecting to Gmail…")
+                        st.session_state.sent_check_report = async_run(check_drafted(
+                            GmailMCPClient(), [drafted[identity] for identity in check_ids], since,
+                            lambda done, total: check_progress.progress(done / total, text=f"Checked {done} / {total}")))
+                    except Exception as exc:
+                        st.error(f"Sent check stopped; no statuses changed: {exc}")
+                report = st.session_state.get("sent_check_report")
+                if report is not None:
+                    st.dataframe([{"Company": item["company"]["company_name"],
+                        "To": item["company"]["hr_email"], "Result": "Matching sent message found" if item["matches"] else "No exact match found — stays Drafted",
+                        "Sent dates": "; ".join(m["date"] for m in item["matches"])} for item in report],
+                        hide_index=True, width="stretch")
+                    matches = {item["company"]["id"]: item for item in report if item["matches"]}
+                    for item in matches.values():
+                        for match in item["matches"]:
+                            st.link_button("Review sent message · " + item["company"]["company_name"] + " · " + match["date"],
+                                "https://mail.google.com/mail/u/0/#sent/" + match["message_id"])
+                    reviewed = st.multiselect("Reviewed companies to mark Sent", list(matches),
+                        format_func=lambda identity: matches[identity]["company"]["company_name"], key="sent_check_reviewed",
+                        disabled=job_running)
+                    st.caption("Open links in the connected Gmail account. Select only messages you confirmed are the intended applications, especially if several drafts exist for the same recipient.")
+                    if st.button(f"Mark reviewed companies Sent ({len(reviewed)})", disabled=job_running or not reviewed):
+                        try:
+                            count = apply_sent_checks(STORE, report, reviewed)
+                            st.session_state.pop("sent_check_report", None)
+                            st.session_state.pop("confirmation_job", None)
+                            st.session_state.sources_notice = f"Marked {count} reviewed applications Sent. No emails were sent by the checker."
+                            reload_table()
+                        except (ValueError, OSError) as exc:
+                            st.error(f"Statuses not updated: {exc}")
             with st.expander("Auto-select skills for queued companies"):
                 st.caption("Check companies in the queue, choose a resume-based skill preset, then review and apply the skills below. This replaces Relevant skills only for the selected companies.")
                 skills_locked = job_running or STORE.batch_lock.exists()

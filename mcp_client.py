@@ -9,6 +9,7 @@ import re
 import shutil
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from email.utils import getaddresses
 
 from jsonschema import Draft202012Validator
 from mcp import ClientSession, StdioServerParameters
@@ -34,6 +35,34 @@ class GmailConnection:
     def __init__(self, session, tools):
         self.session = session
         self.tools = {tool.name: tool for tool in tools}
+
+    async def read_tool(self, name, arguments):
+        if name not in ("search_emails", "read_email") or name not in self.tools:
+            raise ValueError(f"Gmail MCP must provide the read-only {name} tool for sent checking")
+        Draft202012Validator(self.tools[name].inputSchema).validate(arguments)
+        result = await self.session.call_tool(name, arguments=arguments)
+        if result.isError:
+            raise ValueError(f"Gmail {name} failed. No status was changed; retry the check later")
+        return "\n".join(block.text for block in result.content if block.type == "text")
+
+    async def find_sent(self, recipient, since):
+        if not EMAIL.fullmatch(recipient):
+            raise ValueError("Invalid recipient for sent check")
+        # Search only Sent; independently verify exact Subject and To headers.
+        query = f'in:sent to:({recipient}) subject:"{SUBJECT}" after:{since:%Y/%m/%d}'
+        text = await self.read_tool("search_emails", {"query": query, "maxResults": 5})
+        if text.strip() and not re.search(r"^ID: [a-fA-F0-9]+\s*$", text, re.M):
+            raise ValueError("Unrecognized Gmail search response; no status was changed")
+        found = []
+        for identity in dict.fromkeys(re.findall(r"^ID: ([a-fA-F0-9]+)\s*$", text, re.M)):
+            message = await self.read_tool("read_email", {"messageId": identity})
+            header = message.replace("\r\n", "\n").split("\n\n", 1)[0]
+            headers = dict(line.split(": ", 1) for line in header.splitlines() if ": " in line)
+            addresses = {address.casefold() for _, address in getaddresses([headers.get("To", "")])}
+            if headers.get("Subject") == SUBJECT and addresses == {recipient.casefold()}:
+                found.append({"message_id": identity, "date": headers.get("Date", "Unknown"),
+                              "sender": headers.get("From", "Unknown")})
+        return found
 
     def require_tool(self, mode):
         names = {"draft": ("draft_email", "create_draft"), "send": ("send_email",)}
