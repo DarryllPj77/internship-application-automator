@@ -87,8 +87,9 @@ def confirm_batch(job):
     st.caption("These copy recipients apply to every email in this batch. BCC is hidden from other recipients.")
     st.write(f"Attachment: **{Path(job['cv_path']).name}**")
     st.write("Subject: " + SUBJECT)
-    st.dataframe([{"Company": c.company_name, "To": c.hr_email, "Current status": c.status.title()}
-                  for c in job["companies"]], hide_index=True, width="stretch")
+    st.dataframe([{"#": number, "Company": c.company_name, "To": c.hr_email, "Current status": c.status.title()}
+                  for number, c in enumerate(job["companies"], start=1)], hide_index=True, width="stretch",
+                 column_config={"#": st.column_config.NumberColumn("#", width="small", format="%d")})
     if any(c.status == "sent" for c in job["companies"]):
         st.warning("You explicitly selected previously sent applications. This batch will process them again.")
     with st.expander("Review every rendered email"):
@@ -246,6 +247,8 @@ def main():
                     if original.id in chosen_ids:
                         selected.append(replacements[-1])
                 st.session_state.selected_ids = [c.id for c in selected]
+                if set(st.session_state.selected_ids) != set(selected_ids):
+                    st.session_state.pop("confirmation_job", None)
                 if replacements != companies:
                     STORE.replace(replacements, companies)
                     companies = replacements
@@ -386,10 +389,10 @@ def main():
                         st.error(f"Template not saved: {exc}")
             with preview_tab:
                 st.markdown("**Live email preview**")
-                if companies:
-                    preview_by_id = {c.id: c for c in companies}
+                if selected:
+                    preview_by_id = {c.id: c for c in selected}
                     if st.session_state.get("preview_company_id") not in preview_by_id:
-                        st.session_state.preview_company_id = companies[0].id
+                        st.session_state.preview_company_id = selected[0].id
                     preview_id = st.selectbox("Preview company", list(preview_by_id), key="preview_company_id",
                                               format_func=lambda identity: f"{preview_by_id[identity].company_name} · {preview_by_id[identity].hr_email}")
                     preview = preview_by_id[preview_id]
@@ -404,7 +407,8 @@ def main():
                     if "{" in body or "}" in body:
                         st.error("Missing/unreplaced placeholders or stray braces. Execution is blocked.")
                 else:
-                    st.info("Add a company to preview your application.")
+                    st.session_state.pop("preview_company_id", None)
+                    st.info("Check a company in the queue to preview its email. Only selected companies appear here.")
 
     with st.container(key="batch_panel"):
         st.header("Batch activity", anchor=False)
