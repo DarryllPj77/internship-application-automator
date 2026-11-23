@@ -437,11 +437,23 @@ class DashboardTests(unittest.TestCase):
             self.assertFalse(app.exception)
             self.assertEqual(app.toggle[0].value, False)
             self.assertEqual(len(app.metric), 4)
+            self.assertFalse(any(item.label == "Preview company" for item in app.selectbox))
+            companies = CompanyStore(root / "companies.json").load()
+            app.session_state["selected_ids"] = [c.id for c in companies]
+            app.run()
             preview = next(item for item in app.selectbox if item.label == "Preview company")
             self.assertIn("Northstar", preview.options[0])
             preview.select_index(1).run()
             self.assertFalse(app.exception)
             self.assertTrue(any("internships@evergreen.example" in item.value for item in app.markdown))
+            app.session_state["selected_ids"] = [companies[0].id]
+            app.run()
+            preview = next(item for item in app.selectbox if item.label == "Preview company")
+            self.assertEqual(len(preview.options), 1)
+            self.assertIn("Northstar", preview.options[0])
+            app.session_state["selected_ids"] = []
+            app.run()
+            self.assertFalse(any(item.label == "Preview company" for item in app.selectbox))
 
     def test_queue_edit_and_delete_update_live_preview_and_selection(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -469,7 +481,40 @@ class DashboardTests(unittest.TestCase):
             self.assertFalse(app.exception)
             self.assertEqual([c.id for c in store.load()], [first.id])
             self.assertEqual(app.session_state['selected_ids'], [])
-            self.assertEqual(app.session_state['preview_company_id'], first.id)
+            self.assertFalse(any(item.label == "Preview company" for item in app.selectbox))
+
+    def test_sidebar_navigation_preserves_queue_and_unfinished_form_inputs(self):
+        from workspace_navigation import SECTIONS
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            company = Company(company_name="Acme", hr_email="hr@acme.com", status="drafted")
+            store = CompanyStore(root / "companies.json")
+            store._write([company])
+            atomic_text(root / "template.txt", "Hello {company_name}")
+            code = (ROOT / "app.py").read_text(encoding="utf-8").replace(
+                "ROOT = Path(__file__).resolve().parent", f"ROOT = Path({str(root)!r})")
+            with patch('ui.company_table', return_value=None):
+                app = AppTest.from_string(code, default_timeout=30)
+                app.session_state['selected_ids'] = [company.id]
+                app.run()
+                self.assertEqual(app.session_state['workspace_section'], 'settings')
+                self.assertEqual(next(iter(SECTIONS)), 'settings')
+                self.assertEqual(list(SECTIONS)[-1], 'batch')
+                self.assertFalse(next(t for t in app.toggle if t.key == 'send_mode').value)
+                next(t for t in app.toggle if t.key == 'send_mode').set_value(True).run()
+                self.assertTrue(any(b.label == 'Send Emails to Selected (1)' for b in app.button))
+                next(t for t in app.text_input if t.key == "new_company_name").set_value("Unfinished company").run()
+                next(t for t in app.text_input if t.key == "new_company_skills_text").set_value("SQL and Python").run()
+                next(t for t in app.text_input if t.key == "cv_path").set_value("pending-resume.pdf").run()
+                for section in SECTIONS:
+                    next(r for r in app.radio if r.key == "workspace_section").set_value(section).run()
+                    self.assertFalse(app.exception)
+                    self.assertEqual(app.session_state['selected_ids'], [company.id])
+                    self.assertEqual(app.session_state['new_company_name'], "Unfinished company")
+                    self.assertEqual(app.session_state['new_company_skills_text'], "SQL and Python")
+                    self.assertEqual(app.session_state['cv_path'], "pending-resume.pdf")
+                    self.assertTrue(app.session_state['send_mode'])
+                    self.assertEqual(store.load()[0].status, "drafted")
 
     def test_stale_queue_action_cannot_delete_a_company(self):
         with tempfile.TemporaryDirectory() as directory:
