@@ -167,7 +167,7 @@ class ApplicationTests(unittest.TestCase):
         original = self.payload()
         schema = {"type": "object", "additionalProperties": False,
                   "properties": {key: {} for key in original}}
-        session = SimpleNamespace(call_tool=AsyncMock(return_value=CallToolResult(content=[])))
+        session = SimpleNamespace(call_tool=AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text='{"id":"offline-confirmed-id"}')])))
         tool = SimpleNamespace(name="draft_email", inputSchema=schema)
         connection = GmailConnection(session, [tool])
         asyncio.run(connection.deliver("draft", original))
@@ -187,7 +187,7 @@ class ApplicationTests(unittest.TestCase):
         schema["properties"]["bcc"] = {"type": "array", "items": {"type": "string"}}
         tools = [SimpleNamespace(name=name, inputSchema=schema) for name in ("draft_email", "send_email")]
         session = SimpleNamespace(call_tool=AsyncMock(return_value=CallToolResult(
-            content=[TextContent(type="text", text="offline success")])))
+            content=[TextContent(type="text", text='{"id":"offline-confirmed-id"}')])))
         connection = GmailConnection(session, tools)
         for mode in ("draft", "send"):
             for field in ("cc", "bcc"):

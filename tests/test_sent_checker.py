@@ -44,7 +44,7 @@ class SentCheckTests(unittest.TestCase):
         connection, _ = self.connection([reply("")])
         self.assertEqual(asyncio.run(connection.find_sent("hr@example.com", date.today())), [])
         connection, _ = self.connection([CallToolResult(isError=True, content=[])])
-        with self.assertRaises(ValueError):
+        with self.assertRaises(RuntimeError):
             asyncio.run(connection.find_sent("hr@example.com", date.today()))
         connection, _ = self.connection([reply("unexpected output")])
         with self.assertRaises(ValueError):

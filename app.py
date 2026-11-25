@@ -20,6 +20,8 @@ from matcher_ui import render_matcher
 from skills_ui import relevant_skills_picker
 from sent_checker import check_drafted, apply_sent_checks
 from workspace_navigation import navigate
+from active_partners_ui import render_active_partner_source
+from mail_errors import mail_error_message
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -140,15 +142,21 @@ def main():
                         with st.spinner("Starting server and discovering tools…"):
                             capabilities = async_run(GmailMCPClient().test_connection())
                         st.session_state.mcp_connected = True
+                        st.session_state.pop("gmail_auth_error", None)
                         st.session_state.capabilities = capabilities
                         st.rerun()
                     except Exception as exc:
                         st.session_state.mcp_connected = False
-                        st.error(str(exc))
+                        st.error(mail_error_message(exc))
                 if "capabilities" in st.session_state:
                     with st.expander("Discovered tools"):
                         st.json(st.session_state.capabilities)
                 st.caption("Last discovery result. Each batch reconnects; the OAuth account determines the sender.")
+                if st.session_state.get("gmail_auth_error"):
+                    st.error(st.session_state.gmail_auth_error)
+                with st.expander("Reconnect Gmail after an authorization error"):
+                    st.caption("If Gmail reports invalid_grant, reconnect the account that should hold your drafts. Then click Test MCP Connection; it now verifies Google access with a read-only request.")
+                    st.code("npx.cmd -y @gongrzhe/server-gmail-autoauth-mcp auth", language="powershell")
             with path_col:
                 if "cv_path" not in st.session_state:
                     st.session_state.cv_path = os.getenv("CV_FILE_PATH", "")
@@ -209,9 +217,10 @@ def main():
             st.markdown('<div class="section-label">01 / Company queue</div>', unsafe_allow_html=True)
             st.header("Target companies", anchor=False)
             st.caption("Edit a field to save. Select the companies for your next batch.")
+            active_names = render_active_partner_source(ROOT, companies, disabled=job_running)
             selected_ids = st.session_state.get("selected_ids", [])
             editor_key = f"companies_editor_{st.session_state.get('editor_version', 0)}"
-            event = company_table(companies, selected_ids, disabled=job_running, key=editor_key)
+            event = company_table(companies, selected_ids, disabled=job_running, key=editor_key, active_names=active_names)
             if event and event.get("action"):
                 action = event["action"]
                 nonce = action.get("nonce")
@@ -260,6 +269,8 @@ def main():
         with st.expander("Check drafted emails sent manually in Gmail", expanded=True):
             st.caption("Read Gmail Sent for matching recipients and the fixed application subject, then review matches before updating your queue. Missing drafts are never treated as sent. This does not send emails or prove delivery to an inbox.")
             drafted = {c.id: c for c in companies if c.status == "drafted" and not c.needs_review}
+            if "sent_check_companies" in st.session_state:
+                st.session_state.sent_check_companies = [identity for identity in st.session_state.sent_check_companies if identity in drafted]
             check_ids = st.multiselect("Drafted companies to check (up to 25)", list(drafted),
                 default=[c.id for c in selected if c.id in drafted][:25],
                 format_func=lambda identity: drafted[identity].company_name + " · " + drafted[identity].hr_email,
@@ -276,7 +287,7 @@ def main():
                         GmailMCPClient(), [drafted[identity] for identity in check_ids], since,
                         lambda done, total: check_progress.progress(done / total, text=f"Checked {done} / {total}")))
                 except Exception as exc:
-                    st.error(f"Sent check stopped; no statuses changed: {exc}")
+                    st.error(f"Sent check stopped; no statuses changed: {mail_error_message(exc)}")
             report = st.session_state.get("sent_check_report")
             if report is not None:
                 st.dataframe([{"Company": item["company"]["company_name"],
@@ -464,12 +475,15 @@ def main():
                         progress.progress(value, text=f"Processed {int(value * len(job['companies']))} / {len(job['companies'])}")
                     elif kind == "countdown":
                         countdown.info(f"Next email in {value}s…") if value else countdown.empty()
+                    elif kind == "auth_error":
+                        st.session_state.mcp_connected = False
+                        st.session_state.gmail_auth_error = value
                 try:
                     async_run(run_batch(STORE, GmailMCPClient(), **job, emit=emit))
                     emit("log", "Batch finished. Check company statuses for results.")
                 except Exception as exc:
                     st.session_state.mcp_connected = False
-                    emit("log", f"Batch stopped: {exc}")
+                    emit("log", f"Batch stopped: {mail_error_message(exc)}")
                 finally:
                     st.session_state.selected_ids = []
                 reload_table()

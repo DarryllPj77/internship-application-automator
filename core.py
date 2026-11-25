@@ -16,6 +16,7 @@ from typing import Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from mail_errors import is_auth_error, mail_error_message
 
 SUBJECT = "FEU TECH - DARRYLL PAJAGANAS - Internship Application - BSCSSE - 2TSY2627 - Internship 1"
 FIELDS = ("company_name", "hr_email", "contact_person", "relevant_skills")
@@ -99,6 +100,10 @@ class Opportunity(BaseModel):
         return value.strip()
 
 
+def clean_company_name(value: str) -> str:
+    return re.sub(r"\s+", " ", value.replace("*", "")).strip()
+
+
 class Company(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(default_factory=lambda: uuid4().hex, min_length=1)
@@ -115,6 +120,11 @@ class Company(BaseModel):
     industry: str = ""
     company_address: str = ""
     opportunities: list[Opportunity] = Field(default_factory=list, max_length=100)
+
+    @field_validator("company_name", mode="before")
+    @classmethod
+    def remove_directory_markers(cls, value):
+        return clean_company_name(value) if isinstance(value, str) else value
 
     @field_validator("contact_person", "relevant_skills", mode="before")
     @classmethod
@@ -390,10 +400,18 @@ async def run_batch(store, client, companies, template, cv_path, mode, emit, sle
                 emit("log", f"Processing {company.company_name} <{company.hr_email}>")
                 try:
                     result = await connection.deliver(mode, payload)
-                except Exception as exc:
+                except asyncio.CancelledError:
                     store.update(company.id, status="failed", needs_review=True,
-                                 last_result=f"Uncertain/failed: {exc}")
-                    emit("log", f"FAILED / REVIEW REQUIRED · {company.company_name}: {exc}")
+                                 last_result="Operation interrupted. Check Gmail Drafts and Sent before retrying; no automatic retry was made.")
+                    raise
+                except Exception as exc:
+                    auth_failure = is_auth_error(exc)
+                    message = mail_error_message(exc)
+                    store.update(company.id, status="failed", needs_review=not auth_failure,
+                                 last_result=("Authorization failed: " if auth_failure else "Uncertain/failed: ") + message)
+                    emit("log", f"FAILED{' / RECONNECT GMAIL' if auth_failure else ' / REVIEW REQUIRED'} · {company.company_name}: {message}")
+                    if auth_failure:
+                        emit("auth_error", message)
                     emit("progress", (index + 1) / len(companies))
                     # Transport failures may invalidate the session. Stop without retry.
                     break

@@ -16,6 +16,47 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from core import SUBJECT, EMAIL, EmailSettings, validate_pdf
+from mail_errors import AUTH_MESSAGE, GmailAuthError, is_auth_error, mail_error_message
+
+
+def verify_tool_result(result):
+    """This server sometimes returns Error: text without setting isError."""
+    texts = [block.text for block in result.content if block.type == "text"]
+    structured = result.structuredContent
+    errors = [text for text in texts if re.match(r"\s*(?:error|failed|failure)\s*[:\-]", text, re.I)]
+    for text in texts:
+        try:
+            data = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and data.get("error"):
+            errors.append(str(data["error"]))
+    if isinstance(structured, dict) and structured.get("error"):
+        errors.append(str(structured["error"]))
+    if result.isError or errors:
+        error = RuntimeError("\n".join(errors or texts) or "Gmail tool reported an error")
+        if is_auth_error(error):
+            raise GmailAuthError(AUTH_MESSAGE)
+        raise RuntimeError(mail_error_message(error))
+    return texts
+
+
+def delivery_receipt(result, mode):
+    texts = verify_tool_result(result)
+    pattern = r"Email draft created successfully with ID:\s*([\w:-]+)" if mode == "draft" else r"Email sent successfully with ID:\s*([\w:-]+)"
+    candidates = [result.structuredContent]
+    for text in texts:
+        match = re.fullmatch(pattern, text.strip())
+        if match:
+            return match[1]
+        try:
+            candidates.append(json.loads(text))
+        except ValueError:
+            pass
+    for data in candidates:
+        if isinstance(data, dict) and isinstance(data.get("id"), str) and re.fullmatch(r"[\w:-]+", data["id"]):
+            return data["id"]
+    raise RuntimeError("Gmail did not return a confirmed message/draft ID. Check Gmail before retrying; the outcome is uncertain.")
 
 
 def email_html(body: str) -> str:
@@ -41,9 +82,7 @@ class GmailConnection:
             raise ValueError(f"Gmail MCP must provide the read-only {name} tool for sent checking")
         Draft202012Validator(self.tools[name].inputSchema).validate(arguments)
         result = await self.session.call_tool(name, arguments=arguments)
-        if result.isError:
-            raise ValueError(f"Gmail {name} failed. No status was changed; retry the check later")
-        return "\n".join(block.text for block in result.content if block.type == "text")
+        return "\n".join(verify_tool_result(result))
 
     async def find_sent(self, recipient, since):
         if not EMAIL.fullmatch(recipient):
@@ -105,10 +144,10 @@ class GmailConnection:
             payload = {**payload, "htmlBody": email_html(payload["body"]), "mimeType": "multipart/alternative"}
             self.validate_payload(mode, payload)
         result = await self.session.call_tool(tool.name, arguments=payload)
+        receipt = delivery_receipt(result, mode)
         content = [block.model_dump(mode="json") for block in result.content]
-        summary = json.dumps({"content": content, "structuredContent": result.structuredContent}, ensure_ascii=False)
-        if result.isError:
-            raise RuntimeError(summary)
+        summary = json.dumps({"content": content, "structuredContent": result.structuredContent,
+                              "receipt": {"mode": mode, "id": receipt}}, ensure_ascii=False)
         return summary
 
 
@@ -127,25 +166,35 @@ class GmailMCPClient:
             raise ValueError(f"MCP command not found: {self.command}. Install Node.js and restart the terminal.")
         params = StdioServerParameters(command=command, args=self.args, env=dict(os.environ))
         # Startup, discovery, and requests are bounded. Keep all contexts on one task.
-        async with asyncio.timeout(90) as startup_timeout:
-            async with stdio_client(params) as (read, write):
-                async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=60)) as session:
-                    await session.initialize()
-                    tools = []
-                    cursor = None
-                    while True:
-                        page = await session.list_tools(cursor=cursor)
-                        tools.extend(page.tools)
-                        cursor = page.nextCursor
-                        if not cursor:
-                            break
-                    connection = GmailConnection(session, tools)
-                    # Only startup is timed; batches can legitimately run for hours.
-                    startup_timeout.reschedule(None)
-                    yield connection
+        try:
+            async with asyncio.timeout(90) as startup_timeout:
+                async with stdio_client(params) as (read, write):
+                    async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=60)) as session:
+                        await session.initialize()
+                        tools = []
+                        cursor = None
+                        while True:
+                            page = await session.list_tools(cursor=cursor)
+                            tools.extend(page.tools)
+                            cursor = page.nextCursor
+                            if not cursor:
+                                break
+                        connection = GmailConnection(session, tools)
+                        # Only startup is timed; batches can legitimately run for hours.
+                        startup_timeout.reschedule(None)
+                        yield connection
+
+        except Exception as exc:
+            if is_auth_error(exc):
+                raise GmailAuthError(AUTH_MESSAGE) from None
+            if getattr(exc, "exceptions", None):
+                raise RuntimeError(mail_error_message(exc)) from None
+            raise
 
     async def test_connection(self):
         async with self.connect() as connection:
+            # Listing tools only proves the process started, not Google access.
+            await connection.read_tool("search_emails", {"query": "in:drafts", "maxResults": 1})
             availability = {}
             for mode in ("draft", "send"):
                 try:
