@@ -8,8 +8,8 @@ from pathlib import Path
 
 import streamlit as st
 
-from company_sources import DirectoryMapping, read_directory_file, map_directory, merge_directory
-from core import Company, Opportunity
+from company_sources import DirectoryMapping, read_directory_file, map_directory, merge_directory, suggest_directory_mapping
+from core import Company, Opportunity, EMAIL
 from job_research import fetch_public_posting, posting_suggestion
 from sheets_client import SheetsReader, spreadsheet_reference
 
@@ -23,8 +23,8 @@ def column_letter(index):
     return result
 
 
-def render_sources(store, companies, *, disabled=False):
-    with st.expander("Company sources & opportunities", expanded=st.query_params.get("sources") == "1"):
+def render_sources(store, companies, *, disabled=False, expanded=False):
+    with st.expander("Company sources & opportunities", expanded=expanded or st.query_params.get("sources") == "1"):
         st.caption("Read a directory, review its contacts, then add them to your queue. Research stays separate from email sending.")
         directory, research = st.tabs(["Directory import", "Roles & tech stacks"])
         with directory:
@@ -95,7 +95,7 @@ def _uploaded_source(disabled):
         if len(names) > 1:
             _, rows = read_directory_file(raw, uploaded.name, title)
         st.session_state.directory_matrix = {"mode": "Upload Excel / CSV", "rows": rows,
-            "source": f"Uploaded: {uploaded.name} | {title}", "digest": hashlib.sha256(raw).hexdigest()}
+            "source": f"Uploaded: {uploaded.name} | {title}", "title": title, "digest": hashlib.sha256(raw).hexdigest()}
     except Exception as exc:
         st.session_state.pop("directory_matrix", None)
         st.error(f"Directory could not be loaded: {exc}")
@@ -106,7 +106,7 @@ def _directory_review(store, companies, staged, disabled):
     if not rows:
         st.info("This worksheet is empty")
         return
-    fingerprint = hashlib.sha256(json.dumps(staged, sort_keys=True).encode()).hexdigest()[:16]
+    fingerprint = hashlib.sha256(("mapping-v2" + json.dumps(staged, sort_keys=True)).encode()).hexdigest()[:16]
     width = max(len(row) for row in rows)
     if not width:
         st.info("No values found")
@@ -117,7 +117,8 @@ def _directory_review(store, companies, staged, disabled):
             return "Not mapped"
         sample = " / ".join(str(row[index])[:45] for row in rows[:3] if index < len(row) and row[index])
         return f"{column_letter(index)} · {sample or 'No header'}"
-    st.caption("Column letters match the source worksheet. For the supplied FEU layout, data starts at row 4; company B, POC name E, POC position F, POC email G. Map another POC group and import again if needed.")
+    defaults = suggest_directory_mapping(rows)
+    st.caption(f"Suggested from worksheet headers: company {column_letter(defaults.company)}, contact {column_letter(defaults.contact)}, position {column_letter(defaults.position)}, email {column_letter(defaults.email)}. Check the source rows before importing. You can choose a POC email column instead of generic HR email.")
     with st.expander("Source rows (first 8)"):
         st.dataframe([{column_letter(i): str(row[i]) if i < len(row) else "" for i in columns}
                       for row in rows[:8]], hide_index=True)
@@ -125,29 +126,67 @@ def _directory_review(store, companies, staged, disabled):
                             step=1, key=f"first_{fingerprint}", disabled=disabled)
     mapped = {}
     for field, title, default, optional in (("company", "Company column", 1, False),
-            ("contact", "POC name column", 4, False), ("position", "POC position column", 5, False),
-            ("email", "POC email column", 6, False), ("industry", "Industry column", 2, True),
+            ("contact", "POC name column", defaults.contact, False), ("position", "POC position column", defaults.position, False),
+            ("email", "POC email column", defaults.email, False), ("industry", "Industry column", 2, True),
             ("address", "Address column", 3, True)):
         options = ([None] if optional else []) + columns
         chosen = default if default in columns else (None if optional else columns[0])
         mapped[field] = st.selectbox(title, options, index=options.index(chosen), format_func=label,
                                     key=f"mapping_{fingerprint}_{field}", disabled=disabled)
-    candidates = map_directory(rows, DirectoryMapping(first_data_row=int(first), **mapped), staged["source"])
+    fallback_email = defaults.fallback_email if mapped["email"] == defaults.email else None
+    if fallback_email is not None:
+        st.caption(f"When the selected generic HR email is blank, use POC email {column_letter(fallback_email)} from the same row. Invalid nonempty addresses still need correction.")
+    candidates = map_directory(rows, DirectoryMapping(first_data_row=int(first), fallback_email=fallback_email, **mapped), staged["source"])
     digest = hashlib.sha256(json.dumps(candidates, sort_keys=True).encode()).hexdigest()[:16]
     if not candidates:
         st.info("No company rows found for this mapping")
         return
-    st.caption("Check Include for the contacts to add. Blank or invalid emails start unchecked; fix them before importing. Existing email addresses are skipped, with their statuses and edits preserved.")
-    edited = st.data_editor(candidates, key=f"directory_review_{digest}", hide_index=True,
+    active_import = staged.get("title", "").strip().upper() == "ACTIVE INDUSTRY PARTNERS"
+    st.caption("Check Include for the contacts to add. Blank or invalid emails start unchecked; fix them before importing. Existing email addresses reuse their queue records, preserving statuses and edits. Different HR addresses remain separate contacts.")
+    if active_import and staged.get("url"):
+        st.caption("Adding reviewed contacts also refreshes Active partners only from this worksheet. General Masterlist contacts remain in your queue.")
+    rows_key = f"directory_review_rows_{digest}"
+    version_key = f"directory_review_version_{digest}"
+    base = st.session_state.get(rows_key, candidates)
+    version = st.session_state.get(version_key, 0)
+    editor_key = f"directory_review_{digest}_{version}"
+    select_col, clear_col = st.columns(2)
+    select_all = select_col.button("Select all valid contacts", key=f"directory_select_{digest}", disabled=disabled)
+    clear_all = clear_col.button("Clear selection", key=f"directory_clear_{digest}", disabled=disabled)
+    if select_all or clear_all:
+        # Keep inline edits, including a just-corrected email, when rebuilding the selection.
+        base = [dict(row) for row in base]
+        for index, changes in st.session_state.get(editor_key, {}).get("edited_rows", {}).items():
+            if 0 <= int(index) < len(base):
+                base[int(index)].update(changes)
+        for row in base:
+            row["include"] = bool(select_all and EMAIL.fullmatch(str(row.get("hr_email", "")).strip()))
+        st.session_state[rows_key] = base
+        version += 1
+        st.session_state[version_key] = version
+        editor_key = f"directory_review_{digest}_{version}"
+    edited = st.data_editor(base, key=editor_key, hide_index=True,
         disabled=True if disabled else ["directory_source", "source_row"], num_rows="fixed", width="stretch")
     if st.button("Add reviewed contacts to queue", type="primary", disabled=disabled):
         try:
             updated, added, skipped = merge_directory(companies, list(edited))
             if not added and not skipped:
                 raise ValueError("Check Include on at least one contact")
+            snapshot = None
+            if active_import and staged.get("url"):
+                from active_partners import build_active_list, save_active_list
+                snapshot = build_active_list(rows, source_url=staged["url"], worksheet=staged["title"],
+                    first_data_row=int(first), company_column=mapped["company"])
             store.replace(updated, companies)
+            active_note = ""
+            if snapshot is not None:
+                try:
+                    save_active_list(store.path.parent / ".local" / "active-partners.json", snapshot)
+                    active_note = " Active-partner filter refreshed."
+                except OSError:
+                    active_note = " Contacts saved, but the active-list file could not be updated; refresh it in Company queue."
             st.session_state.pop("confirmation_job", None)
-            st.session_state.sources_notice = f"Added {added} contacts; skipped {skipped} existing addresses. No emails were created or sent."
+            st.session_state.sources_notice = f"Added {added} contacts; reused {skipped} existing addresses.{active_note} No emails were created or sent."
             st.rerun()
         except (ValueError, OSError) as exc:
             st.error(f"Import not saved: {exc}")

@@ -11,6 +11,7 @@ import random
 import re
 import tempfile
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -114,7 +115,14 @@ class Company(BaseModel):
     status: Literal["pending", "drafted", "sent", "failed"] = "pending"
     needs_review: bool = False
     last_result: str = ""
+    status_reason: str = ""
+    delivery_state: Literal["unknown", "delayed", "failed"] = "unknown"
+    delivery_notice_id: str = ""
+    delivery_notice_at: str = ""
+    delivery_outbound_id: str = ""
+    last_operation_at: str = ""
     directory_source: str = ""
+    directory_names: list[str] = Field(default_factory=list)
     source_row: int | None = None
     contact_position: str = ""
     industry: str = ""
@@ -402,12 +410,14 @@ async def run_batch(store, client, companies, template, cv_path, mode, emit, sle
                     result = await connection.deliver(mode, payload)
                 except asyncio.CancelledError:
                     store.update(company.id, status="failed", needs_review=True,
+                                 status_reason="Operation interrupted; check Gmail before retrying.",
                                  last_result="Operation interrupted. Check Gmail Drafts and Sent before retrying; no automatic retry was made.")
                     raise
                 except Exception as exc:
                     auth_failure = is_auth_error(exc)
                     message = mail_error_message(exc)
                     store.update(company.id, status="failed", needs_review=not auth_failure,
+                                 status_reason="Gmail authorization failed; reconnect." if auth_failure else "Gmail operation failed or is uncertain; review before retrying.",
                                  last_result=("Authorization failed: " if auth_failure else "Uncertain/failed: ") + message)
                     emit("log", f"FAILED{' / RECONNECT GMAIL' if auth_failure else ' / REVIEW REQUIRED'} · {company.company_name}: {message}")
                     if auth_failure:
@@ -417,7 +427,9 @@ async def run_batch(store, client, companies, template, cv_path, mode, emit, sle
                     break
                 else:
                     store.update(company.id, status="drafted" if mode == "draft" else "sent",
-                                 needs_review=False, last_result=result)
+                                 needs_review=False, last_result=result, status_reason="", delivery_state="unknown",
+                                 delivery_notice_id="", delivery_notice_at="", delivery_outbound_id="",
+                                 last_operation_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
                     emit("log", f"{'DRAFTED' if mode == 'draft' else 'SENT'} · {company.company_name}\nMCP: {result}")
                 emit("progress", (index + 1) / len(companies))
                 if mode == "send" and index < len(companies) - 1:

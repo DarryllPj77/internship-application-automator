@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import streamlit.components.v1 as components
+from partner_matcher import normalize_company
 
 UI_ROOT = Path(__file__).resolve().parent / "ui"
 _company_table = components.declare_component("company_table", path=str(UI_ROOT.parent / "static"))
@@ -22,11 +23,14 @@ def status_pill(status: str, label: str | None = None) -> str:
     return f'<span class="status-pill status-{status}"><span aria-hidden="true" class="status-dot"></span>{html.escape(label or status.title())}</span>'
 
 
-def company_table(companies, selected_ids, *, disabled=False, key="company_table"):
+def company_table(companies, selected_ids, *, disabled=False, key="company_table", active_names=None):
     rows = [company.model_dump() for company in companies]
+    for row in rows:
+        row["active_partner"] = any(normalize_company(name) in active_names for name in
+            [row["company_name"], *row["directory_names"]]) if active_names is not None else None
     revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
     event = _company_table(rows=rows, selected_ids=selected_ids, revision=revision,
-                           disabled=disabled, key=key, default=None)
+                           disabled=disabled, key=key, default=None, active_available=active_names is not None)
     if event and event.get("revision") == revision:
         return event
     if event and event.get("action"):

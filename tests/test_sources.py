@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 
 from streamlit.testing.v1 import AppTest
 
-from company_sources import DirectoryMapping, map_directory, merge_directory, read_directory_file
+from company_sources import DirectoryMapping, map_directory, merge_directory, read_directory_file, suggest_directory_mapping
 from core import Company, CompanyEdit, CompanyStore, atomic_text
 from job_research import posting_suggestion, fetch_public_posting
 from sheets_client import SheetsReader, spreadsheet_reference, save_token
@@ -40,7 +40,8 @@ class DirectoryTests(unittest.TestCase):
         rows = map_directory(self.matrix(), DirectoryMapping(), SOURCE)
         updated, added, skipped = merge_directory([existing], rows)
         self.assertEqual((added, skipped), (0, 1))
-        self.assertEqual(updated, [existing])
+        self.assertEqual(updated[0].model_dump(exclude={"directory_names"}), existing.model_dump(exclude={"directory_names"}))
+        self.assertEqual(updated[0].directory_names, ["Software Co"])
         rows[1].update(include=True, hr_email="new@company.test")
         updated, added, skipped = merge_directory([existing], rows)
         self.assertEqual((added, skipped), (1, 1))
@@ -173,6 +174,46 @@ class ResearchTests(unittest.TestCase):
 
 
 class SourcesUITests(unittest.TestCase):
+    def test_active_import_detects_layout_preserves_existing_and_refreshes_membership(self):
+        from active_partners import load_active_list
+        from partner_matcher import normalize_company
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = CompanyStore(root / "companies.json")
+            existing = Company(company_name="ABS-CBN Film Productions, Inc. (AFPI)",
+                hr_email="hr@abs.test", status="sent", relevant_skills="C#", last_result="receipt")
+            store._write([existing])
+            atomic_text(root / "template.txt", "Hello {company_name}")
+            rows = [[], ["", "INDUSTRY PARTNER", "TYPE OF INDUSTRY", "COMPANY ADDRESS", "GENERIC HR EMAIL ADDRESS", "POINT OF CONTACT (POC) 1"],
+                    ["", "", "", "", "", "Name", "Position", "Email"],
+                    [1, "ABS CBN Film Productions", "Media", "Manila", "HR@abs.test", "Recruiter", "HR", "poc@abs.test"],
+                    [2, "Active Only Co", "Software", "Manila", "", "Another recruiter", "HR", "hr@active.test"],
+                    [3, "Missing email", "", "", "", "", "", ""]]
+            mapping = suggest_directory_mapping(rows)
+            self.assertEqual((mapping.email, mapping.contact, mapping.position, mapping.fallback_email), (4, 5, 6, 7))
+            app = self.dashboard(root)
+            app.session_state.directory_source_mode = "Upload Excel / CSV"
+            def staged_upload(disabled):
+                import streamlit as st
+                st.session_state.directory_matrix = {"mode": "Upload Excel / CSV", "rows": rows,
+                    "source": SOURCE + " | ACTIVE INDUSTRY PARTNERS", "url": SOURCE, "title": "ACTIVE INDUSTRY PARTNERS"}
+            with patch("sources_ui._uploaded_source", side_effect=staged_upload):
+                app.run()
+                for _ in range(2):
+                    next(b for b in app.button if b.label == "Select all valid contacts").click().run()
+                    next(b for b in app.button if b.label == "Add reviewed contacts to queue").click().run()
+                    self.assertFalse(app.exception)
+                saved = store.load()
+                self.assertEqual(len(saved), 2)
+                self.assertEqual(saved[0].id, existing.id)
+                self.assertEqual((saved[0].status, saved[0].relevant_skills, saved[0].last_result), ("sent", "C#", "receipt"))
+                self.assertEqual(saved[0].directory_names, ["ABS CBN Film Productions"])
+                self.assertEqual(saved[1].hr_email, "hr@active.test")
+                self.assertEqual(saved[1].contact_person, "Another recruiter")
+                snapshot = load_active_list(root / ".local" / "active-partners.json")
+                self.assertIn(normalize_company(saved[0].directory_names[0]), snapshot.names)
+                self.assertIn(normalize_company(saved[1].company_name), snapshot.names)
+
     def dashboard(self, root):
         code = (ROOT / "app.py").read_text(encoding="utf-8").replace(
             "ROOT = Path(__file__).resolve().parent", f"ROOT = Path({str(root)!r})")
@@ -194,6 +235,20 @@ class SourcesUITests(unittest.TestCase):
             with patch("sources_ui._uploaded_source", side_effect=staged_upload):
                 app.run()
                 self.assertFalse(app.exception)
+                next(b for b in app.button if b.label == "Clear selection").click().run()
+                review_rows_key = next(key for key in app.session_state._state.filtered_state if key.startswith("directory_review_rows_"))
+                self.assertTrue(all(not row["include"] for row in app.session_state[review_rows_key]))
+                self.assertEqual(store.load(), [])
+                editor_key = next(key for key in app.session_state._state.filtered_state
+                                  if key.startswith("directory_review_") and not key.startswith(("directory_review_rows_", "directory_review_version_"))
+                                  and key.endswith("_1"))
+                app.session_state[editor_key] = {"edited_rows": {0: {"contact_person": "Edited contact"}},
+                                                 "added_rows": [], "deleted_rows": []}
+                next(b for b in app.button if b.label == "Select all valid contacts").click().run()
+                selected_rows = app.session_state[review_rows_key]
+                self.assertEqual(selected_rows[0]["contact_person"], "Edited contact")
+                self.assertTrue(selected_rows[0]["include"])
+                self.assertTrue(all(not row["include"] for row in selected_rows if not row["hr_email"]))
                 next(b for b in app.button if b.label == "Add reviewed contacts to queue").click().run()
                 self.assertFalse(app.exception)
                 self.assertEqual(store.load()[0].hr_email, "hr@company.test")

@@ -7,7 +7,21 @@ const path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');
 const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
-function setup(standalone=false) {
+test('company search ignores punctuation and finds imported directory aliases',()=>{
+  const table=setup();
+  table.rows[0].company_name='ABS-CBN Film Productions, Inc. (AFPI)';
+  table.rows[0].directory_names=['ABS CBN Film Productions'];
+  table.rows[0].active_partner=true;
+  table.render([],false,true);
+  table.elements['partner-filter'].value='active';
+  table.elements.search.value='ABS CBN Film Productions';
+  table.elements.search.fire('input');
+  assert.equal(table.elements.range.textContent,'1–1 of 1');
+  table.elements.search.value='abs-cbn film';table.elements.search.fire('input');
+  assert.equal(table.elements.range.textContent,'1–1 of 1');
+});
+
+function setup(standalone=false, storage=new Map()) {
   class Element {
     constructor(tag='div') {this.tag=tag;this.children=[];this.listeners={};this.value='';this.checked=false;this.disabled=false;this.classes=new Set();this.classList={toggle:(name,on)=>on?this.classes.add(name):this.classes.delete(name)}}
     append(...children) {this.children.push(...children)}
@@ -23,7 +37,8 @@ function setup(standalone=false) {
   const messages=[],listeners={},requests=[];
   const parent={postMessage:message=>messages.push(message)};
   const document={getElementById:id=>elements[id],createElement:tag=>new Element(tag),createTextNode:text=>({text}),body:{getBoundingClientRect:()=>({height:420})},fonts:{ready:Promise.resolve()}};
-  const window={parent,addEventListener:(name,fn)=>listeners[name]=fn};
+  const window={parent,addEventListener:(name,fn)=>listeners[name]=fn,
+    sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)}};
   if(standalone) {window.parent=window;window.postMessage=message=>messages.push(message)}
   const rows=Array.from({length:25},(_,i)=>({id:String(i),company_name:`Company ${i}`,hr_email:`hr${i}@acme.com`,contact_person:'HR',relevant_skills:'Python',status:i===0?'sent':'pending'}));
   let persisted=structuredClone(rows);
@@ -39,10 +54,73 @@ function setup(standalone=false) {
     return {ok:true,json:async()=>data};
   };
   vm.runInNewContext(script,{window,document,fetch,requestAnimationFrame:fn=>fn()});
-  function render(selected_ids=[],disabled=false) {listeners.message({source:parent,data:{type:'streamlit:render',args:{rows,selected_ids,disabled,revision:'v1'}}})}
+  function render(selected_ids=[],disabled=false,active_available=false) {listeners.message({source:parent,data:{type:'streamlit:render',args:{rows,selected_ids,disabled,active_available,revision:'v1'}}})}
   const lastValue=()=>messages.filter(m=>m.type==='streamlit:setComponentValue').at(-1)?.value;
-  return {elements,messages,listeners,render,lastValue,rows,requests};
+  return {elements,messages,listeners,render,lastValue,rows,requests,storage};
 }
+
+test('queue filter search and pagination survive frame recreation',()=>{
+  const table=setup();table.render();
+  table.elements['status-filter'].value='pending';table.elements['status-filter'].fire('change');
+  table.elements.search.value='Company';table.elements.search.fire('input');
+  table.elements.next.fire('click');
+  const restored=setup(false,table.storage);restored.render(['12']);
+  assert.equal(restored.elements['status-filter'].value,'pending');
+  assert.equal(restored.elements.search.value,'Company');
+  assert.equal(restored.elements.range.textContent,'11–20 of 24');
+  assert.equal(restored.elements.selection.textContent,'1 selected');
+  restored.elements['page-size'].value='20';restored.elements['page-size'].fire('change');
+  const resized=setup(false,table.storage);resized.render();
+  assert.equal(resized.elements['page-size'].value,'20');
+  assert.equal(resized.elements.range.textContent,'1–20 of 24');
+});
+
+test('active-list filter combines with status, safely handles missing source, and persists',()=>{
+  const table=setup();table.rows.forEach((row,i)=>row.active_partner=i<2);
+  table.render();
+  table.elements['partner-filter'].value='active';table.elements['partner-filter'].fire('change');
+  assert.equal(table.elements.range.textContent,'0 companies');
+  assert.equal(table.elements['partner-filter-hint'].hidden,false);
+  table.render([],false,true);
+  assert.equal(table.elements.range.textContent,'1–2 of 2');
+  table.elements['status-filter'].value='pending';table.elements['status-filter'].fire('change');
+  assert.equal(table.elements.range.textContent,'1–1 of 1');
+  table.elements['select-pending'].fire('click');
+  assert.deepEqual([...table.lastValue().selected_ids],['1']);
+  table.elements['partner-filter'].value='unmatched';table.elements['partner-filter'].fire('change');
+  assert.equal(table.elements.range.textContent,'1–10 of 23');
+  assert.equal(table.elements['selection-hint'].hidden,false);
+  const restored=setup(false,table.storage);restored.rows.forEach((row,i)=>row.active_partner=i<2);
+  restored.render([],false,true);
+  assert.equal(restored.elements['partner-filter'].value,'unmatched');
+  assert.equal(restored.elements.range.textContent,'1–10 of 23');
+});
+
+test('repeated-name review groups spelling variants without merging related legal entities',()=>{
+  const table=setup();
+  table.rows[0].company_name='Acme, Inc.';
+  table.rows[1].company_name='ACME Corporation';
+  table.rows[2].company_name='Chevron Holdings, Inc.';
+  table.rows[3].company_name='Chevron Philippines, Inc.';
+  table.render();
+  table.elements['company-name-filter'].value='repeated';table.elements['company-name-filter'].fire('change');
+  assert.equal(table.elements.range.textContent,'1–2 of 2');
+  table.elements['status-filter'].value='pending';table.elements['status-filter'].fire('change');
+  assert.equal(table.elements.range.textContent,'1–1 of 1');
+  table.elements['select-pending'].fire('click');
+  assert.deepEqual([...table.lastValue().selected_ids],['1']);
+  table.elements['company-name-filter'].value='all';table.elements['company-name-filter'].fire('change');
+  table.elements.search.value='Chevron';table.elements.search.fire('input');
+  assert.equal(table.elements.range.textContent,'1–2 of 2');
+  table.elements['company-name-filter'].value='repeated';table.elements['company-name-filter'].fire('change');
+  assert.equal(table.elements.range.textContent,'0 companies');
+  table.elements['company-name-filter'].value='unique';table.elements['company-name-filter'].fire('change');
+  assert.equal(table.elements.range.textContent,'1–2 of 2');
+  const restored=setup(false,table.storage);restored.rows[2].company_name='Chevron Holdings, Inc.';restored.rows[3].company_name='Chevron Philippines, Inc.';restored.render();
+  assert.equal(restored.elements['company-name-filter'].value,'unique');
+  assert.equal(table.rows.length,25);
+  assert.equal(table.rows[0].status,'sent');
+});
 
 test('sent rows begin unchecked; explicit selection survives pagination and search',()=>{
   const table=setup();table.render();
@@ -85,6 +163,14 @@ test('rapid checkbox clicks retain highlights through stale renders and acknowle
   table.render(['0']); // latest selection acknowledged
   table.render([]); // later authoritative clear is respected
   assert.equal(table.elements.selection.textContent,'0 selected');
+});
+
+test('delivery failure reason appears beneath the status as plain text',()=>{
+  const table=setup();table.rows[0].status='failed';table.rows[0].status_reason='Recipient inbox is full.';
+  table.render();
+  const state=table.elements.rows.children[0].children[4];
+  assert.equal(state.children[1].textContent,'Recipient inbox is full.');
+  assert.equal(state.children[1].className,'status-reason');
 });
 
 test('inline edits emit the revision and edited field for Python validation',()=>{
@@ -142,6 +228,23 @@ test('select all pending uses the shared toolbar and never auto-selects sent row
   assert.equal(table.lastValue().selected_ids.includes('0'),false);
   assert.equal(table.lastValue().selected_ids.includes('1'),false);
   assert.equal(table.elements['bulk-delete'].hidden,false);
+});
+
+test('clear selection undoes select all pending across pages and filters',()=>{
+  const table=setup();table.render();
+  table.elements['select-pending'].fire('click');
+  assert.equal(table.lastValue().selected_ids.length,24);
+  assert.equal(table.elements['clear-selection'].hidden,false);
+  table.elements.next.fire('click');
+  table.elements.search.value='Company 24';table.elements.search.fire('input');
+  table.elements['clear-selection'].fire('click');
+  assert.equal(table.lastValue().selected_ids.length,0);
+  assert.equal(table.elements.selection.textContent,'0 selected');
+  assert.equal(table.elements['bulk-delete'].hidden,true);
+  assert.equal(table.elements['clear-selection'].hidden,true);
+  assert.equal(table.elements.rows.children[0].classes.has('selected'),false);
+  table.render([],true);
+  assert.equal(table.elements['clear-selection'].disabled,true);
 });
 
 test('edit modal is prefilled; cancel does not change data or selection',()=>{

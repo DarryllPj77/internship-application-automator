@@ -38,6 +38,7 @@ input[type=checkbox]:disabled {opacity:.5;cursor:default}
 .dot {width:5px;height:5px;border-radius:50%;background:currentColor}
 .pending {background:#F4FBF8;color:#374151;border-color:#A7F3D0}.drafted {background:#D1FAE5;color:#047857;border-color:#A7F3D0}
 .sent {background:#ECFDF5;color:#047857;border-color:#A7F3D0}.failed {background:#FFF1F2;color:#BE123C;border-color:#FECDD3}
+.status-reason {display:block;font-size:10px;line-height:1.4;margin-top:4px;overflow-wrap:anywhere;color:var(--muted)}
 .review {display:block;font-size:10px;color:#BE123C;margin-top:4px}.empty {padding:32px;text-align:center;color:var(--muted)}
 .footer {display:flex;justify-content:space-between;align-items:center;gap:12px;padding-top:16px}.pagination {display:flex;gap:8px;align-items:center}.pagination select {font-size:12px;padding:6px}
 .toolbar-actions,.row-actions {display:flex;align-items:center;justify-content:flex-end;gap:8px}.toolbar-actions {flex-wrap:wrap}
@@ -62,7 +63,10 @@ body:has(.standalone) {background:var(--canvas)}
 </head>
 <body>
 <header id="standalone-header" hidden><h1>Company Queue</h1><p>Edit and organize your internship applications. <a href="http://127.0.0.1:8501/">Open the email dashboard</a></p></header>
-<div class="toolbar"><div class="queue-filters"><input class="search" id="search" type="search" placeholder="Search companies or email…" aria-label="Search companies"><select id="status-filter" aria-label="Filter companies by status"><option value="all">All statuses</option><option value="pending">Pending</option><option value="drafted">Drafted</option><option value="sent">Sent</option><option value="failed">Failed</option></select></div><div class="toolbar-actions"><button id="select-pending">Select all pending</button><span class="count" id="selection" aria-live="polite"></span><button id="bulk-delete" class="danger" hidden>Delete Selected (0)</button></div></div>
+<div class="toolbar"><div class="queue-filters"><input class="search" id="search" type="search" placeholder="Search companies or email…" aria-label="Search companies"><select id="status-filter" aria-label="Filter companies by status"><option value="all">All statuses</option><option value="pending">Pending</option><option value="drafted">Drafted</option><option value="sent">Sent</option><option value="failed">Failed</option></select><select id="partner-filter" aria-label="Filter companies by active partner list"><option value="all">All partners</option><option value="active">Active partners only</option><option value="unmatched">Not in active list</option></select><select id="company-name-filter" aria-label="Filter repeated company names" title="Repeated names may be different contact rows. Shared brand keywords are not merged."><option value="all">All company names</option><option value="repeated">Repeated company names</option><option value="unique">Unique company names</option></select></div><div class="toolbar-actions"><button id="select-pending">Select all pending</button><button id="clear-selection" hidden title="Uncheck every company across all pages and filters">Clear selection</button><span class="count" id="selection" aria-live="polite"></span><button id="bulk-delete" class="danger" hidden>Delete Selected (0)</button></div></div>
+<p id="partner-filter-hint" class="count" hidden>Load a reviewed worksheet in Configure active partner list above to use this filter.</p>
+<p id="company-name-hint" class="count" hidden>Repeated company names can have different HR contacts. Search a keyword such as Chevron to review related names; related legal entities are not automatically merged.</p>
+<p id="selection-hint" class="count" hidden></p>
 <p id="notice" class="error" role="alert" hidden></p>
 <div class="table-scroll" tabindex="0" aria-label="Editable companies table; scroll horizontally for more columns">
 <table aria-label="Target companies"><thead><tr>
@@ -82,8 +86,27 @@ body:has(.standalone) {background:var(--canvas)}
 // Streamlit's component protocol. Messages are accepted only from this frame's parent.
 const post = (type, extra={}) => window.parent.postMessage({isStreamlitMessage:true,type,...extra}, '*');
 const embedded=window.parent!==window;
-let rows=[], selected=new Set(), revision='', disabled=false, page=0, pageSize=10, signature='', frameHeight=0, modalOpen=false, busy=false, editId=null, deleteIds=[], deleteBulk=false, activePreview=null, pendingSelection=null;
+let rows=[], selected=new Set(), revision='', disabled=false, page=0, pageSize=10, signature='', frameHeight=0, modalOpen=false, busy=false, editId=null, deleteIds=[], deleteBulk=false, activePreview=null, pendingSelection=null, activeAvailable=false;
 const $ = id => document.getElementById(id);
+const viewStorageKey='internship-desk.queue-view.v1';
+function saveQueueView() {
+  try {window.sessionStorage.setItem(viewStorageKey,JSON.stringify({
+    search:$('search').value,status:$('status-filter').value,partner:$('partner-filter').value,companyNames:$('company-name-filter').value,page,pageSize
+  }))} catch {} // Storage can be unavailable in restrictive browser settings.
+}
+function restoreQueueView() {
+  try {
+    const saved=JSON.parse(window.sessionStorage.getItem(viewStorageKey)||'null');
+    if(!saved||typeof saved!=='object')return;
+    if(typeof saved.search==='string')$('search').value=saved.search;
+    if(['all','pending','drafted','sent','failed'].includes(saved.status))$('status-filter').value=saved.status;
+    if(['all','active','unmatched'].includes(saved.partner))$('partner-filter').value=saved.partner;
+    if(['all','repeated','unique'].includes(saved.companyNames))$('company-name-filter').value=saved.companyNames;
+    if([10,20,50].includes(saved.pageSize)){pageSize=saved.pageSize;$('page-size').value=String(pageSize)}
+    if(Number.isSafeInteger(saved.page)&&saved.page>=0)page=saved.page;
+  } catch {}
+}
+restoreQueueView();
 const emit = () => {pendingSelection=new Set(selected);post('streamlit:setComponentValue', {dataType:'json',value:{revision,rows,selected_ids:[...selected]}})};
 function resizeFrame() {
   const height=Math.max(Math.ceil(document.body.getBoundingClientRect().height)+2,modalOpen?650:0);
@@ -98,14 +121,27 @@ function cellInput(row,field,className) {
   input.addEventListener('change',()=>{row[field]=input.value;emit()});
   return input;
 }
+function companyNameKey(name) {
+  let value=name.normalize('NFKD').replace(/[^\x00-\x7F]/g,'').toLocaleLowerCase().replaceAll('&',' and ').replace(/[^a-z0-9]+/g,' ').trim();
+  const suffix=/\s+(?:incorporated|inc|corporation|corp|limited|ltd|llc|plc|opc|company|co)$/;
+  while(suffix.test(value))value=value.replace(suffix,'');
+  return value||name.trim().toLocaleLowerCase();
+}
 function filteredRows() {
   const status=$('status-filter').value;
+  const partner=$('partner-filter').value;
+  const nameFilter=$('company-name-filter').value,counts=new Map();
+  if(nameFilter&&nameFilter!=='all')rows.forEach(row=>{const key=companyNameKey(row.company_name);counts.set(key,(counts.get(key)||0)+1)});
   const query=$('search').value.toLocaleLowerCase().trim();
-  return rows.filter(r=>(!status||status==='all'||r.status===status)&&[r.company_name,r.hr_email,r.contact_person,r.relevant_skills].some(v=>v.toLocaleLowerCase().includes(query)));
+  const searchKey=value=>value.normalize('NFKD').toLocaleLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  return rows.filter(r=>(!nameFilter||nameFilter==='all'||(nameFilter==='repeated'?counts.get(companyNameKey(r.company_name))>1:counts.get(companyNameKey(r.company_name))===1))&&(!status||status==='all'||r.status===status)&&(!partner||partner==='all'||(activeAvailable&&(partner==='active'?r.active_partner===true:r.active_partner===false)))&&[r.company_name,r.hr_email,r.contact_person,r.relevant_skills,...(r.directory_names||[])].some(v=>v.toLocaleLowerCase().includes(query)||searchKey(v).includes(searchKey(query))));
 }
 function paint() {
   const filtered=filteredRows();
+  $('company-name-hint').hidden=!$('company-name-filter').value||$('company-name-filter').value==='all';
+  $('partner-filter-hint').hidden=activeAvailable||!$('partner-filter').value||$('partner-filter').value==='all';
   page=Math.min(page,Math.max(0,Math.ceil(filtered.length/pageSize)-1));
+  saveQueueView();
   const visible=filtered.slice(page*pageSize,(page+1)*pageSize), body=$('rows'); body.replaceChildren();
   visible.forEach(row=>{
     const tr=document.createElement('tr');tr.classList.toggle('selected',selected.has(row.id));
@@ -121,6 +157,7 @@ function paint() {
     const state=document.createElement('td'),pill=document.createElement('span'),dot=document.createElement('span');
     const status=['pending','drafted','sent','failed'].includes(row.status)?row.status:'pending';
     pill.className='pill '+status;dot.className='dot';dot.setAttribute('aria-hidden','true');pill.append(dot,document.createTextNode(status[0].toUpperCase()+status.slice(1)));state.append(pill);
+    if(row.status_reason) {const reason=document.createElement('span');reason.className='status-reason';reason.textContent=row.status_reason;reason.title=row.status_reason;state.append(reason)}
     if(row.needs_review) {const review=document.createElement('span');review.className='review';review.textContent='Review in Gmail';state.append(review)}
     tr.append(state);
     const actions=document.createElement('td'),group=document.createElement('div');actions.className='actions-col';group.className='row-actions';
@@ -132,6 +169,11 @@ function paint() {
   updateSelection(visible);requestAnimationFrame(resizeFrame);
 }
 function updateSelection(visible) {
+  $('clear-selection').hidden=selected.size===0;$('clear-selection').disabled=disabled||busy;
+  const shownIds=new Set(filteredRows().map(row=>row.id));
+  const hiddenCount=[...selected].filter(id=>!shownIds.has(id)).length;
+  $('selection-hint').hidden=hiddenCount===0;
+  $('selection-hint').textContent=`${hiddenCount} selected companies are hidden by your filters. Clear selection to choose only visible companies.`;
   $('selection').textContent=`${selected.size} selected`;
   $('bulk-delete').hidden=selected.size===0;$('bulk-delete').textContent=`Delete Selected (${selected.size})`;$('bulk-delete').disabled=disabled||busy;
   $('select-pending').disabled=disabled||busy||!filteredRows().some(r=>r.status==='pending'&&!r.needs_review);
@@ -139,6 +181,7 @@ function updateSelection(visible) {
   $('select-page').checked=visible.length>0&&checked===visible.length;$('select-page').indeterminate=checked>0&&checked<visible.length;
   $('select-page').disabled=disabled||!visible.length;
   requestAnimationFrame(resizeFrame);
+  if(!embedded)refreshPreview().catch(error=>{$('notice').hidden=false;$('notice').textContent=error.message});
 }
 function actionButton(kind,row) {
   const button=document.createElement('button');button.type='button';button.className='icon-button '+kind;button.title=kind==='edit'?'Edit company':'Delete company';button.setAttribute('aria-label',button.title+' '+row.company_name);button.disabled=disabled||busy;
@@ -182,11 +225,13 @@ $('delete-confirm').addEventListener('click',()=>commitAction({type:'delete',ids
 $('edit-cancel').addEventListener('click',()=>closeModal('edit-modal'));$('delete-cancel').addEventListener('click',()=>closeModal('delete-modal'));
 for(const id of ['edit-modal','delete-modal'])$(id).addEventListener('cancel',()=>{modalOpen=false;requestAnimationFrame(resizeFrame)});
 $('bulk-delete').addEventListener('click',e=>{e.stopPropagation();if(!disabled&&!busy)openDelete([...selected],true)});
+$('clear-selection').addEventListener('click',()=>{if(disabled||busy)return;selected.clear();paint();if(embedded)emit()});
 $('select-pending').addEventListener('click',()=>{if(disabled||busy)return;selected=new Set(filteredRows().filter(r=>r.status==='pending'&&!r.needs_review).map(r=>r.id));paint();if(embedded)emit()});
 async function refreshPreview() {
   if(embedded)return;
-  activePreview=rows.some(row=>row.id===activePreview)?activePreview:(rows[0]?.id||null);
-  const select=$('preview-company');select.replaceChildren();rows.forEach(row=>{const option=document.createElement('option');option.value=row.id;option.textContent=row.company_name+' · '+row.hr_email;select.append(option)});
+  const previewRows=rows.filter(row=>selected.has(row.id));
+  activePreview=previewRows.some(row=>row.id===activePreview)?activePreview:(previewRows[0]?.id||null);
+  const select=$('preview-company');select.replaceChildren();previewRows.forEach(row=>{const option=document.createElement('option');option.value=row.id;option.textContent=row.company_name+' · '+row.hr_email;select.append(option)});
   select.disabled=!activePreview;select.value=activePreview||'';
   if(!activePreview) {for(const id of ['preview-to','preview-subject','preview-body'])$(id).textContent='';return}
   const requested=activePreview,data=await apiRequest('/api/preview/'+encodeURIComponent(requested));if(requested!==activePreview)return;
@@ -197,12 +242,14 @@ $('select-page').addEventListener('change',()=>{
   const visible=filteredRows().slice(page*pageSize,(page+1)*pageSize);
   visible.forEach(row=>$('select-page').checked?selected.add(row.id):selected.delete(row.id));paint();emit();
 });
+$('company-name-filter').addEventListener('change',()=>{page=0;paint()});
+$('partner-filter').addEventListener('change',()=>{page=0;paint()});
 $('status-filter').addEventListener('change',()=>{page=0;paint()});
 $('search').addEventListener('input',()=>{page=0;paint()});$('page-size').addEventListener('change',()=>{pageSize=+$('page-size').value;page=0;paint()});
 $('previous').addEventListener('click',()=>{page--;paint()});$('next').addEventListener('click',()=>{page++;paint()});
 window.addEventListener('message',event=>{
   if(event.source!==window.parent||event.data.type!=='streamlit:render')return;
-  const args=event.data.args, nextSignature=JSON.stringify([args.rows,args.selected_ids,args.disabled]);
+  const args=event.data.args, nextSignature=JSON.stringify([args.rows,args.selected_ids,args.disabled,args.active_available]);
   if(signature===nextSignature)return;signature=nextSignature;
   const sameSelection=(a,b)=>a.size===b.size&&[...a].every(id=>b.has(id));
   let incoming=new Set(args.selected_ids);
@@ -212,8 +259,8 @@ window.addEventListener('message',event=>{
     if(sameSelection(incoming,pendingSelection))pendingSelection=null;
     else incoming=new Set(pendingSelection);
   } else pendingSelection=null;
-  const changed=revision!==args.revision||JSON.stringify(rows)!==JSON.stringify(args.rows)||disabled!==args.disabled||!sameSelection(selected,incoming);
-  rows=args.rows;selected=incoming;revision=args.revision;disabled=args.disabled;
+  const changed=activeAvailable!==Boolean(args.active_available)||revision!==args.revision||JSON.stringify(rows)!==JSON.stringify(args.rows)||disabled!==args.disabled||!sameSelection(selected,incoming);
+  rows=args.rows;selected=incoming;revision=args.revision;disabled=args.disabled;activeAvailable=Boolean(args.active_available);
   // Don't replace checkbox DOM nodes for a selection acknowledgement: this
   // can swallow a second click while the user is selecting several rows.
   if(changed)paint();
@@ -221,7 +268,7 @@ window.addEventListener('message',event=>{
 window.addEventListener('resize',resizeFrame);
 document.fonts.ready.then(resizeFrame);
 if(embedded)post('streamlit:componentReady',{apiVersion:1});
-else {document.body.className='standalone';$('standalone-header').hidden=false;$('standalone-preview').hidden=false;$('select-pending').hidden=false;apiRequest('/api/companies').then(data=>{rows=data;paint();return refreshPreview()}).catch(error=>{$('notice').hidden=false;$('notice').textContent=error.message})}
+else {$('partner-filter').hidden=true;$('partner-filter').value='all';document.body.className='standalone';$('standalone-header').hidden=false;$('standalone-preview').hidden=false;$('select-pending').hidden=false;apiRequest('/api/companies').then(data=>{rows=data;paint();return refreshPreview()}).catch(error=>{$('notice').hidden=false;$('notice').textContent=error.message})}
 </script>
 </body>
 </html>

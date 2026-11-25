@@ -7,7 +7,7 @@ import zipfile
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
-from core import Company, EMAIL
+from core import Company, EMAIL, clean_company_name
 
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 
@@ -18,8 +18,18 @@ class DirectoryMapping(BaseModel):
     contact: int = Field(default=4, ge=0, le=51)
     position: int = Field(default=5, ge=0, le=51)
     email: int = Field(default=6, ge=0, le=51)
+    fallback_email: int | None = Field(default=None, ge=0, le=51)
     industry: int | None = Field(default=2, ge=0, le=51)
     address: int | None = Field(default=3, ge=0, le=51)
+
+
+def suggest_directory_mapping(rows):
+    """Recognize the two FEU layouts from headers, never from contact cell values."""
+    generic = next((i for row in rows[:3] for i, value in enumerate(row)
+                    if "GENERIC HR EMAIL" in str(value).upper()), None)
+    if generic is None:
+        return DirectoryMapping()
+    return DirectoryMapping(email=generic, fallback_email=generic + 3, contact=generic + 1, position=generic + 2)
 
 
 def read_directory_file(raw: bytes, filename: str, worksheet: str | None = None):
@@ -59,11 +69,11 @@ def map_directory(rows: list[list], mapping: DirectoryMapping, source: str) -> l
             continue
         def cell(index):
             return str(row[index] or "").strip() if index is not None and index < len(row) else ""
-        name = cell(mapping.company)
+        name = clean_company_name(cell(mapping.company))
         if not name:
             continue
         # Missing/invalid addresses remain visible for review, never guessed or silently sent.
-        email = cell(mapping.email)
+        email = cell(mapping.email) or cell(mapping.fallback_email)
         candidates.append({"include": bool(EMAIL.fullmatch(email)), "company_name": name,
             "hr_email": email, "contact_person": cell(mapping.contact) or "Hiring Team",
             "contact_position": cell(mapping.position), "industry": cell(mapping.industry),
@@ -73,7 +83,7 @@ def map_directory(rows: list[list], mapping: DirectoryMapping, source: str) -> l
 
 def merge_directory(existing: list[Company], candidates: list[dict]) -> tuple[list[Company], int, int]:
     result = list(existing)
-    seen = {c.hr_email.casefold() for c in existing}
+    seen = {c.hr_email.casefold(): i for i, c in enumerate(existing)}
     added = skipped = 0
     for row in candidates:
         if not row.get("include"):
@@ -81,10 +91,17 @@ def merge_directory(existing: list[Company], candidates: list[dict]) -> tuple[li
         company = Company.model_validate({k: row[k] for k in (
             "company_name", "hr_email", "contact_person", "contact_position", "industry",
             "company_address", "directory_source", "source_row") if k in row})
-        if company.hr_email.casefold() in seen:
+        email_key = company.hr_email.casefold()
+        if email_key in seen:
+            index = seen[email_key]
+            original = result[index]
+            # Preserve application state and user edits; retain alternate directory names for filtering.
+            names = list(dict.fromkeys([*original.directory_names, *(
+                [company.company_name] if company.company_name != original.company_name else [])]))
+            result[index] = original.model_copy(update={"directory_names": names})
             skipped += 1
             continue
-        seen.add(company.hr_email.casefold())
+        seen[email_key] = len(result)
         result.append(company)
         added += 1
     if len(result) > 10000:
