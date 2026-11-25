@@ -22,6 +22,7 @@ from sent_checker import check_drafted, apply_sent_checks
 from workspace_navigation import navigate
 from active_partners_ui import render_active_partner_source
 from mail_errors import mail_error_message
+from delivery_monitor_ui import render_delivery_monitor
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -266,13 +267,21 @@ def main():
                 selected = []
             st.caption(f"{len(selected)} selected · {len(companies)} companies · Changes saved automatically")
     with st.container(key="view_checker"):
-        with st.expander("Check drafted emails sent manually in Gmail", expanded=True):
+        render_delivery_monitor(ROOT, STORE, async_run)
+        with st.expander("Review sent emails and delivery outcomes", expanded=True):
             st.caption("Read Gmail Sent for matching recipients and the fixed application subject, then review matches before updating your queue. Missing drafts are never treated as sent. This does not send emails or prove delivery to an inbox.")
-            drafted = {c.id: c for c in companies if c.status == "drafted" and not c.needs_review}
+            review_status = st.selectbox("Company status to review", ["Drafted", "Sent", "Failed"],
+                key="sent_check_status_filter", disabled=job_running)
+            drafted = {c.id: c for c in companies if c.status == review_status.lower() and not c.needs_review}
+            st.caption("Showing Drafted companies that need checking." if review_status == "Drafted" else
+                       f"Showing only {review_status} companies for status corrections.")
+            if not drafted:
+                st.info(f"No {review_status.lower()} companies available to review. Choose another status above.")
             if "sent_check_companies" in st.session_state:
                 st.session_state.sent_check_companies = [identity for identity in st.session_state.sent_check_companies if identity in drafted]
-            check_ids = st.multiselect("Drafted companies to check (up to 25)", list(drafted),
-                default=[c.id for c in selected if c.id in drafted][:25],
+            else:
+                st.session_state.sent_check_companies = [c.id for c in selected if c.id in drafted][:25]
+            check_ids = st.multiselect("Companies to review (up to 25)", list(drafted),
                 format_func=lambda identity: drafted[identity].company_name + " · " + drafted[identity].hr_email,
                 max_selections=25, key="sent_check_companies", disabled=job_running)
             since = st.date_input("Search Sent after", value=datetime.now().date() - timedelta(days=30),
@@ -290,25 +299,46 @@ def main():
                     st.error(f"Sent check stopped; no statuses changed: {mail_error_message(exc)}")
             report = st.session_state.get("sent_check_report")
             if report is not None:
+                report = [item for item in report if item["company"]["id"] in drafted]
+            if report:
                 st.dataframe([{"Company": item["company"]["company_name"],
-                    "To": item["company"]["hr_email"], "Result": "Matching sent message found" if item["matches"] else "No exact match found — stays Drafted",
-                    "Sent dates": "; ".join(m["date"] for m in item["matches"])} for item in report],
+                    "To": item["company"]["hr_email"], "Result": "Matching sent message found" if item["matches"] else "No exact match found — status unchanged",
+                    "Sent dates": "; ".join(m["date"] for m in item["matches"]),
+                    "Current status": item["company"]["status"].title(), "Short reason": item["company"].get("status_reason", "")} for item in report],
                     hide_index=True, width="stretch")
                 matches = {item["company"]["id"]: item for item in report if item["matches"]}
                 for item in matches.values():
                     for match in item["matches"]:
                         st.link_button("Review sent message · " + item["company"]["company_name"] + " · " + match["date"],
                             "https://mail.google.com/mail/u/0/#sent/" + match["message_id"])
-                reviewed = st.multiselect("Reviewed companies to mark Sent", list(matches),
-                    format_func=lambda identity: matches[identity]["company"]["company_name"], key="sent_check_reviewed",
+                outcome_label = st.selectbox("Reviewed outcome", ["Sent", "Failed", "Delivery delayed"], key="sent_review_outcome")
+                outcome = {"Sent": "sent", "Failed": "failed", "Delivery delayed": "delayed"}[outcome_label]
+                reason = ""
+                if outcome == "failed":
+                    reasons = {"Choose a reason": "", "Address not found": "Recipient email address was not found.",
+                        "Recipient inbox full": "Recipient inbox is full.",
+                        "Recipient server unreachable": "Recipient mail server could not be reached; delivery failed.",
+                        "Message blocked / rejected": "Recipient server blocked or rejected the message.", "Other": ""}
+                    preset = st.selectbox("Failure reason", list(reasons), key="sent_review_reason_preset")
+                    reason = st.text_input("Short delivery reason", value=reasons[preset], max_chars=300, key="sent_review_reason_" + preset)
+                elif outcome == "delayed":
+                    reason = st.text_input("Short delivery reason", value="Delivery delayed; no final failure notice confirmed.",
+                                           max_chars=300, key="sent_review_delay_reason")
+                    st.caption("A delay keeps the application marked Sent with a delivery warning. It does not trigger a resend.")
+                reviewable = matches if outcome == "sent" else {item["company"]["id"]: item for item in report}
+                if "sent_check_reviewed" in st.session_state:
+                    st.session_state.sent_check_reviewed = [identity for identity in st.session_state.sent_check_reviewed if identity in reviewable]
+                reviewed = st.multiselect("Reviewed companies to update", list(reviewable),
+                    format_func=lambda identity: reviewable[identity]["company"]["company_name"], key="sent_check_reviewed",
                     disabled=job_running)
-                st.caption("Open links in the connected Gmail account. Select only messages you confirmed are the intended applications, especially if several drafts exist for the same recipient.")
-                if st.button(f"Mark reviewed companies Sent ({len(reviewed)})", disabled=job_running or not reviewed):
+                st.caption("Review the intended message and any delivery notice in the connected Gmail account. Sent means submitted to Gmail, not guaranteed inbox delivery. Failed requires a short reason.")
+                button_label = f"Mark reviewed companies {outcome_label} ({len(reviewed)})" if outcome != "delayed" else f"Record delivery delay ({len(reviewed)})"
+                if st.button(button_label, disabled=job_running or not reviewed or (outcome != "sent" and not reason.strip())):
                     try:
-                        count = apply_sent_checks(STORE, report, reviewed)
+                        count = apply_sent_checks(STORE, report, reviewed, outcome=outcome, reason=reason)
                         st.session_state.pop("sent_check_report", None)
                         st.session_state.pop("confirmation_job", None)
-                        st.session_state.sources_notice = f"Marked {count} reviewed applications Sent. No emails were sent by the checker."
+                        st.session_state.sources_notice = f"Updated {count} reviewed applications: {outcome_label}. No emails were sent by the checker."
                         reload_table()
                     except (ValueError, OSError) as exc:
                         st.error(f"Statuses not updated: {exc}")
