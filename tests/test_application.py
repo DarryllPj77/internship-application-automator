@@ -509,6 +509,9 @@ class DashboardTests(unittest.TestCase):
                 for section in SECTIONS:
                     next(r for r in app.radio if r.key == "workspace_section").set_value(section).run()
                     self.assertFalse(app.exception)
+                    self.assertEqual([metric.value for metric in app.metric], ["0", "1", "0", "0"])
+                    self.assertFalse(any("st-key-application_metrics" in item.value and "display:none!important" in item.value
+                                         for item in app.markdown))
                     self.assertEqual(app.session_state['selected_ids'], [company.id])
                     self.assertEqual(app.session_state['new_company_name'], "Unfinished company")
                     self.assertEqual(app.session_state['new_company_skills_text'], "SQL and Python")

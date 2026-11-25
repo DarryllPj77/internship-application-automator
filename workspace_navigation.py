@@ -36,8 +36,6 @@ def navigate(*, disabled=False):
     # Keep panels mounted: conditional rendering would delete widget state,
     # including unsaved skill choices and the CV picker, on every section change.
     hidden = []
-    if section != "queue":
-        hidden.extend((".st-key-queue_metrics", '[data-testid="stLayoutWrapper"]:has(> .st-key-queue_metrics)'))
     for key in SECTIONS:
         if key != section:
             selector = f".st-key-view_{key}"

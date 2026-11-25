@@ -122,6 +122,12 @@ def main():
     except Exception as exc:
         st.error(f"Cannot load companies.json: {exc}. Fix the file before continuing.")
         st.stop()
+    with st.container(key="application_metrics"):
+        counters = st.columns(4)
+        for column, status in zip(counters, ("pending", "drafted", "sent", "failed")):
+            with column, st.container(key=f"kpi_{status}"):
+                st.markdown(status_pill(status), unsafe_allow_html=True)
+                st.metric(status.title(), sum(c.status == status for c in companies), label_visibility="collapsed")
     job_running = "pending_job" in st.session_state
     section = navigate(disabled=job_running)
     try:
@@ -199,13 +205,6 @@ def main():
                     copies_valid = False
                     copy_settings = EmailSettings()
                     st.error(f"Copy settings not saved. Fix CC / BCC before running a batch: {exc}")
-    with st.container(key="queue_metrics"):
-        counters = st.columns(4)
-        for column, status in zip(counters, ("pending", "drafted", "sent", "failed")):
-            with column, st.container(key=f"kpi_{status}"):
-                st.markdown(status_pill(status), unsafe_allow_html=True)
-                st.metric(status.title(), sum(c.status == status for c in companies), label_visibility="collapsed")
-
     if notice := st.session_state.pop("sources_notice", None):
         st.success(notice)
     with st.container(key="view_sources"):
