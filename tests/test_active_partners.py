@@ -14,6 +14,22 @@ URL = "https://docs.google.com/spreadsheets/d/test-sheet/edit"
 
 
 class ActivePartnerTests(unittest.TestCase):
+    def test_shared_contact_retains_both_worksheet_memberships(self):
+        from company_sources import merge_directory
+        general = URL + " | GENERAL MASTERLIST"
+        active = URL + " | ACTIVE INDUSTRY PARTNERS"
+        original = Company(company_name="Acme", hr_email="hr@acme.com", status="sent", directory_source=general)
+        updated, added, skipped = merge_directory([original], [{"include": True, "company_name": "Acme",
+            "hr_email": "HR@acme.com", "directory_source": active}])
+        self.assertEqual((added, skipped), (0, 1))
+        self.assertEqual(updated[0].status, "sent")
+        self.assertEqual(updated[0].directory_sources, [general, active])
+        with patch("ui._company_table", return_value=None) as component:
+            company_table(updated, [], active_names={"acme"})
+            row = component.call_args.kwargs["rows"][0]
+            self.assertTrue(row["general_masterlist"])
+            self.assertTrue(row["active_partner"])
+
     def test_mapping_normalization_and_snapshot_persistence(self):
         rows = [["title"], [], ["", "Company"], [1, "Acme Inc. *"], [2, "ACME Corporation"], [3, "Other Ltd."]]
         snapshot = build_active_list(rows, source_url=URL, worksheet="Active TECH")

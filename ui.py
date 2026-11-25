@@ -26,6 +26,8 @@ def status_pill(status: str, label: str | None = None) -> str:
 def company_table(companies, selected_ids, *, disabled=False, key="company_table", active_names=None):
     rows = [company.model_dump() for company in companies]
     for row in rows:
+        row["general_masterlist"] = any(source.rsplit("|", 1)[-1].strip().casefold() == "general masterlist"
+            for source in [row["directory_source"], *row["directory_sources"]])
         row["active_partner"] = any(normalize_company(name) in active_names for name in
             [row["company_name"], *row["directory_names"]]) if active_names is not None else None
     revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()

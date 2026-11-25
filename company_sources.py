@@ -98,7 +98,9 @@ def merge_directory(existing: list[Company], candidates: list[dict]) -> tuple[li
             # Preserve application state and user edits; retain alternate directory names for filtering.
             names = list(dict.fromkeys([*original.directory_names, *(
                 [company.company_name] if company.company_name != original.company_name else [])]))
-            result[index] = original.model_copy(update={"directory_names": names})
+            sources = list(dict.fromkeys(source for source in
+                [*original.directory_sources, original.directory_source, company.directory_source] if source))
+            result[index] = original.model_copy(update={"directory_names": names, "directory_sources": sources})
             skipped += 1
             continue
         seen[email_key] = len(result)

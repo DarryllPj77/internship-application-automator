@@ -7,6 +7,24 @@ const path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');
 const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
+test('General Masterlist filter excludes active and shared contacts and needs a saved active list',()=>{
+  const table=setup();
+  table.rows[0].general_masterlist=true;table.rows[0].active_partner=true;
+  table.rows[1].general_masterlist=true;table.rows[1].active_partner=false;
+  table.rows[2].general_masterlist=false;table.rows[2].active_partner=true;
+  table.render([],false,true);
+  table.elements['partner-filter'].value='general';table.elements['partner-filter'].fire('change');
+  assert.equal(table.elements.range.textContent,'1–1 of 1');
+  assert.equal(table.elements['partner-filter-hint'].hidden,true);
+  table.elements['status-filter'].value='pending';table.elements['status-filter'].fire('change');
+  assert.equal(table.elements.range.textContent,'1–1 of 1');
+  table.render([],false,false);
+  assert.equal(table.elements.range.textContent,'0 companies');
+  assert.equal(table.elements['partner-filter-hint'].hidden,false);
+  const restored=setup(false,table.storage);restored.rows[0].general_masterlist=true;
+  restored.render();assert.equal(restored.elements['partner-filter'].value,'general');
+});
+
 test('company search ignores punctuation and finds imported directory aliases',()=>{
   const table=setup();
   table.rows[0].company_name='ABS-CBN Film Productions, Inc. (AFPI)';

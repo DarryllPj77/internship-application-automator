@@ -123,6 +123,7 @@ class Company(BaseModel):
     last_operation_at: str = ""
     directory_source: str = ""
     directory_names: list[str] = Field(default_factory=list)
+    directory_sources: list[str] = Field(default_factory=list)
     source_row: int | None = None
     contact_position: str = ""
     industry: str = ""

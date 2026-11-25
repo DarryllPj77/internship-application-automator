@@ -40,7 +40,7 @@ class DirectoryTests(unittest.TestCase):
         rows = map_directory(self.matrix(), DirectoryMapping(), SOURCE)
         updated, added, skipped = merge_directory([existing], rows)
         self.assertEqual((added, skipped), (0, 1))
-        self.assertEqual(updated[0].model_dump(exclude={"directory_names"}), existing.model_dump(exclude={"directory_names"}))
+        self.assertEqual(updated[0].model_dump(exclude={"directory_names", "directory_sources"}), existing.model_dump(exclude={"directory_names", "directory_sources"}))
         self.assertEqual(updated[0].directory_names, ["Software Co"])
         rows[1].update(include=True, hr_email="new@company.test")
         updated, added, skipped = merge_directory([existing], rows)
