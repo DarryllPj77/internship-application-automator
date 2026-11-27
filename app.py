@@ -23,6 +23,7 @@ from workspace_navigation import navigate
 from active_partners_ui import render_active_partner_source
 from mail_errors import mail_error_message
 from delivery_monitor_ui import render_delivery_monitor
+from status_overview_ui import show_status_overview
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -129,6 +130,8 @@ def main():
             with column, st.container(key=f"kpi_{status}"):
                 st.markdown(status_pill(status), unsafe_allow_html=True)
                 st.metric(status.title(), sum(c.status == status for c in companies), label_visibility="collapsed")
+        if st.button("View companies by status", key="open_status_overview"):
+            show_status_overview(STORE)
     job_running = "pending_job" in st.session_state
     section = navigate(disabled=job_running)
     try:
