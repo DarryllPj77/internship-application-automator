@@ -22,6 +22,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ApplicationTests(unittest.TestCase):
+    def test_sent_company_blocks_entire_draft_or_send_batch_before_connection(self):
+        sent = self.company.model_copy(update={"id": "already-sent", "hr_email": "sent@acme.com", "status": "sent"})
+        self.store._write([self.company, sent])
+        before = self.store.load()
+        client = SimpleNamespace(connect=lambda: self.fail("Sent batch must never connect to Gmail"))
+        for mode in ("draft", "send"):
+            with self.assertRaisesRegex(ValueError, "Already Sent"):
+                asyncio.run(run_batch(self.store, client, [self.company, sent], "Hi", str(self.pdf), mode, lambda *args: None))
+            self.assertEqual(self.store.load(), before)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -310,6 +320,24 @@ class ApplicationTests(unittest.TestCase):
 
 
 class DashboardTests(unittest.TestCase):
+    def test_stale_sent_selection_is_removed_from_batch_actions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sent = Company(company_name="Sent company", hr_email="sent@company.com", status="sent")
+            store = CompanyStore(root / "companies.json")
+            store._write([sent])
+            atomic_text(root / "template.txt", "Hello {company_name}")
+            code = (ROOT / "app.py").read_text(encoding="utf-8").replace(
+                "ROOT = Path(__file__).resolve().parent", f"ROOT = Path({str(root)!r})")
+            with patch("ui.company_table", return_value={"rows": [sent.model_dump()], "selected_ids": [sent.id]}):
+                app = AppTest.from_string(code, default_timeout=30)
+                app.session_state["selected_ids"] = [sent.id]
+                app.run()
+                self.assertFalse(app.exception)
+                self.assertEqual(app.session_state["selected_ids"], [])
+                self.assertTrue(any(b.label == "Create Drafts for Selected (0)" and b.disabled for b in app.button))
+                self.assertEqual(store.load()[0].status, "sent")
+
     def test_upload_activates_cv_and_clear_preserves_a_manual_replacement(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -137,6 +137,7 @@ function filteredRows() {
   return rows.filter(r=>(!nameFilter||nameFilter==='all'||(nameFilter==='repeated'?counts.get(companyNameKey(r.company_name))>1:counts.get(companyNameKey(r.company_name))===1))&&(!status||status==='all'||r.status===status)&&(!partner||partner==='all'||(partner==='general'?(activeAvailable&&r.general_masterlist===true&&r.active_partner===false):(activeAvailable&&(partner==='active'?r.active_partner===true:r.active_partner===false))))&&[r.company_name,r.hr_email,r.contact_person,r.relevant_skills,...(r.directory_names||[])].some(v=>v.toLocaleLowerCase().includes(query)||searchKey(v).includes(searchKey(query))));
 }
 function paint() {
+  selected=new Set([...selected].filter(id=>rows.some(row=>row.id===id&&row.status!=='sent')));
   const filtered=filteredRows();
   $('company-name-hint').hidden=!$('company-name-filter').value||$('company-name-filter').value==='all';
   $('partner-filter-hint').hidden=activeAvailable||!$('partner-filter').value||$('partner-filter').value==='all';
@@ -146,9 +147,10 @@ function paint() {
   visible.forEach(row=>{
     const tr=document.createElement('tr');tr.classList.toggle('selected',selected.has(row.id));
     const checkCell=document.createElement('td'), label=document.createElement('label'), check=document.createElement('input');
-    label.className='check-target';checkCell.className='check-col';check.type='checkbox';check.checked=selected.has(row.id);check.disabled=disabled;
+    label.className='check-target';checkCell.className='check-col';check.type='checkbox';check.checked=selected.has(row.id);check.disabled=disabled||row.status==='sent';
+    if(row.status==='sent')label.title='Already sent — cannot create another draft or send again';
     check.setAttribute('aria-label','Select '+row.company_name);
-    check.addEventListener('change',()=>{check.checked?selected.add(row.id):selected.delete(row.id);tr.classList.toggle('selected',check.checked);updateSelection(visible);emit()});
+    check.addEventListener('change',()=>{if(disabled||row.status==='sent'){check.checked=false;return}check.checked?selected.add(row.id):selected.delete(row.id);tr.classList.toggle('selected',check.checked);updateSelection(visible);emit()});
     label.append(check);checkCell.append(label);tr.append(checkCell);
     const companyCell=document.createElement('td');companyCell.append(cellInput(row,'company_name','company-name'),cellInput(row,'relevant_skills','skills'));
     if(row.opportunities?.length) {const research=document.createElement('div');research.className='skills';research.style.padding='2px 6px';research.style.color='var(--muted)';research.textContent='Roles: '+row.opportunities.map(o=>o.title).join(' · ');research.title=row.opportunities.map(o=>o.title+': '+(o.technologies?.join(', ')||'Tech stack unknown')).join('\n');companyCell.append(research)}
@@ -177,9 +179,9 @@ function updateSelection(visible) {
   $('selection').textContent=`${selected.size} selected`;
   $('bulk-delete').hidden=selected.size===0;$('bulk-delete').textContent=`Delete Selected (${selected.size})`;$('bulk-delete').disabled=disabled||busy;
   $('select-pending').disabled=disabled||busy||!filteredRows().some(r=>r.status==='pending'&&!r.needs_review);
-  const checked=visible.filter(r=>selected.has(r.id)).length;
-  $('select-page').checked=visible.length>0&&checked===visible.length;$('select-page').indeterminate=checked>0&&checked<visible.length;
-  $('select-page').disabled=disabled||!visible.length;
+  const selectable=visible.filter(r=>r.status!=='sent'),checked=selectable.filter(r=>selected.has(r.id)).length;
+  $('select-page').checked=selectable.length>0&&checked===selectable.length;$('select-page').indeterminate=checked>0&&checked<selectable.length;
+  $('select-page').disabled=disabled||!selectable.length;
   requestAnimationFrame(resizeFrame);
   if(!embedded)refreshPreview().catch(error=>{$('notice').hidden=false;$('notice').textContent=error.message});
 }
@@ -239,7 +241,8 @@ async function refreshPreview() {
 }
 $('preview-company').addEventListener('change',()=>{activePreview=$('preview-company').value;refreshPreview().catch(error=>{$('notice').hidden=false;$('notice').textContent=error.message})});
 $('select-page').addEventListener('change',()=>{
-  const visible=filteredRows().slice(page*pageSize,(page+1)*pageSize);
+  if(disabled||busy)return;
+  const visible=filteredRows().slice(page*pageSize,(page+1)*pageSize).filter(row=>row.status!=='sent');
   visible.forEach(row=>$('select-page').checked?selected.add(row.id):selected.delete(row.id));paint();emit();
 });
 $('company-name-filter').addEventListener('change',()=>{page=0;paint()});

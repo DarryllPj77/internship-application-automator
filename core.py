@@ -380,6 +380,8 @@ async def run_batch(store, client, companies, template, cv_path, mode, emit, sle
         raise ValueError("Unknown execution mode")
     if not companies:
         raise ValueError("Select at least one company")
+    if any(c.status == "sent" for c in companies):
+        raise ValueError("Already Sent companies cannot be drafted or sent again")
     if len({c.id for c in companies}) != len(companies):
         raise ValueError("Duplicate selections are not allowed")
     if len({c.hr_email.casefold() for c in companies}) != len(companies):

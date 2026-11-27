@@ -140,15 +140,17 @@ test('repeated-name review groups spelling variants without merging related lega
   assert.equal(table.rows[0].status,'sent');
 });
 
-test('sent rows begin unchecked; explicit selection survives pagination and search',()=>{
-  const table=setup();table.render();
+test('sent rows cannot be selected directly, from stale state, or through select page',()=>{
+  const table=setup();table.render(['0']);
   const checkbox=table.elements.rows.children[0].children[0].children[0].children[0];
-  assert.equal(checkbox.checked,false);checkbox.checked=true;checkbox.fire('change');
-  assert.deepEqual([...table.lastValue().selected_ids],['0']);
-  table.elements.next.fire('click');assert.equal(table.elements.range.textContent,'11–20 of 25');
-  table.elements.search.value='Company 24';table.elements.search.fire('input');
-  assert.equal(table.elements.range.textContent,'1–1 of 1');
-  assert.equal(table.elements.selection.textContent,'1 selected');
+  assert.equal(checkbox.disabled,true);assert.equal(checkbox.checked,false);
+  checkbox.checked=true;checkbox.fire('change');assert.equal(checkbox.checked,false);
+  assert.equal(table.elements.selection.textContent,'0 selected');
+  table.elements['select-page'].checked=true;table.elements['select-page'].fire('change');
+  assert.equal(table.lastValue().selected_ids.includes('0'),false);
+  assert.equal(table.lastValue().selected_ids.length,9);
+  table.elements['status-filter'].value='sent';table.elements['status-filter'].fire('change');
+  assert.equal(table.elements['select-page'].disabled,true);
 });
 
 test('select visible page affects only its rows',()=>{
@@ -160,7 +162,7 @@ test('select visible page affects only its rows',()=>{
 });
 
 test('rapid checkbox clicks retain highlights through stale renders and acknowledgements',()=>{
-  const table=setup();table.render();
+  const table=setup();table.rows[0].status='pending';table.render();
   const first=table.elements.rows.children[0],second=table.elements.rows.children[1];
   const firstCheck=first.children[0].children[0].children[0];
   const secondCheck=second.children[0].children[0].children[0];

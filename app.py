@@ -84,6 +84,9 @@ def update_uploaded_cv():
 
 @st.dialog("Confirm application batch", width="large", on_dismiss=dismiss_confirmation)
 def confirm_batch(job):
+    if any(c.status == "sent" for c in job["companies"]):
+        st.error("Already Sent companies cannot be drafted or sent again. Clear the selection and choose unsent companies.")
+        return
     verb = "Send emails" if job["mode"] == "send" else "Create Gmail drafts"
     st.write(f"**{verb} for {len(job['companies'])} selected companies?**")
     st.text("CC: " + (", ".join(job.get("cc", [])) or "None") +
@@ -94,8 +97,6 @@ def confirm_batch(job):
     st.dataframe([{"#": number, "Company": c.company_name, "To": c.hr_email, "Current status": c.status.title()}
                   for number, c in enumerate(job["companies"], start=1)], hide_index=True, width="stretch",
                  column_config={"#": st.column_config.NumberColumn("#", width="small", format="%d")})
-    if any(c.status == "sent" for c in job["companies"]):
-        st.warning("You explicitly selected previously sent applications. This batch will process them again.")
     with st.expander("Review every rendered email"):
         for company in job["companies"]:
             st.markdown(f"**{company.company_name}**")
@@ -252,7 +253,7 @@ def main():
                 for original in companies:
                     row = edited.get(original.id, original.model_dump())
                     replacements.append(Company.model_validate({**original.model_dump(), **{key: row[key] for key in FIELDS}}))
-                    if original.id in chosen_ids:
+                    if original.id in chosen_ids and original.status != "sent" and replacements[-1].status != "sent":
                         selected.append(replacements[-1])
                 st.session_state.selected_ids = [c.id for c in selected]
                 if set(st.session_state.selected_ids) != set(selected_ids):
