@@ -13,3 +13,5 @@ email_settings.json
 uploads/
 .local/
 sheets-oauth-client.json
+.agents/
+skills-lock.json

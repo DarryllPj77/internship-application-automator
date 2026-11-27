@@ -128,7 +128,7 @@ class ResumeSkillUITests(unittest.TestCase):
             next(m for m in app.multiselect if m.key == "new_company_skills_selected").set_value(["C#"]).run()
             self.assertEqual(next(t for t in app.text_input if t.label == "Company name").value, "Test Company")
             self.assertEqual(next(t for t in app.text_input if t.label == "HR email").value, "hr@company.test")
-            next(t for t in app.text_input if t.label == "Relevant skills").set_value("C# software development")
+            next(t for t in app.text_input if t.key == "new_company_skills_text").set_value("C# software development")
             next(b for b in app.button if b.label == "Add Company").click().run()
             self.assertFalse(app.exception)
             saved = CompanyStore(root / "companies.json").load()[0]

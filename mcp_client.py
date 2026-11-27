@@ -100,7 +100,7 @@ class GmailConnection:
             addresses = {address.casefold() for _, address in getaddresses([headers.get("To", "")])}
             if headers.get("Subject") == SUBJECT and addresses == {recipient.casefold()}:
                 found.append({"message_id": identity, "date": headers.get("Date", "Unknown"),
-                              "sender": headers.get("From", "Unknown")})
+                              "sender": headers.get("From", "Unknown"), "thread_id": headers.get("Thread ID", "")})
         return found
 
     def require_tool(self, mode):

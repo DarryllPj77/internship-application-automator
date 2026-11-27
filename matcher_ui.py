@@ -19,9 +19,9 @@ from skills_ui import relevant_skills_picker
 from requirements_ui import requirements_finder
 
 
-def render_matcher(root: Path, *, disabled=False):
+def render_matcher(root: Path, *, disabled=False, expanded=False):
     store = MatcherStore(root / ".local" / "partner-jobs.json")
-    with st.expander("FEU Partner Job Matcher", expanded=st.query_params.get("matcher") == "1"):
+    with st.expander("FEU Partner Job Matcher", expanded=expanded or st.query_params.get("matcher") == "1"):
         st.caption("Find C# / .NET opportunities at companies listed in your FEU directory. Search links work without an API key. A directory entry is not proof of a current partnership or an open internship.")
         try:
             state = store.load()

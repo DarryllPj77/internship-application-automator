@@ -547,6 +547,81 @@ The key is read on rerun and never displayed. Search-link generation works witho
 it. No provider account, paid plan, or API key is created automatically.
 API reference: [Brave Web Search](https://api-dashboard.search.brave.com/documentation/services/web-search).
 
+### Application status and delivery review
+
+The shared header shows Pending, Drafted, Sent, and Failed totals. **View companies
+by status** opens a read-only numbered table with descriptions and recorded failure
+reasons. Sent companies cannot be selected for another draft or send batch.
+
+**Check sent drafts** defaults to Drafted companies. Select Sent or Failed separately
+when correcting recorded outcomes. The optional delivery checker matches Gmail
+failure notices to the latest application by recipient, subject, thread, and date.
+Automatic checks run every five minutes only while the app/browser session is open;
+they never resend mail. Temporary delays remain separate from final failures.
+Monitor history and active-list snapshots stay in ignored `.local/` files.
+
+Imports reuse existing email records and retain statuses, skills, and worksheet
+provenance. Different HR email addresses remain separate contacts. Membership reflects
+the saved worksheet, not independent confirmation of the partnership. Alternate
+directory names retained for a shared email can affect membership; review company
+identity rather than assuming a shared contact proves two employers are identical.
+
+### Optional local SearXNG + Brave hybrid
+
+The requirements finder and partner discovery now include a **Search provider**
+selector. **Brave** keeps direct API search. **SearXNG** uses your instance's general
+engines. **Hybrid** sends queries containing JobStreet, LinkedIn, or Indeed `site:`
+filters to the instance's `braveapi` engine, and other queries to its general engines.
+Exactly one provider request is made per search; there is no paid fallback or retry.
+Searches containing several source filters still use one Brave query, not one per site.
+The default requirements sources and partner discovery include job-board filters,
+so those searches consume Brave requests in Hybrid mode. Select only Company career
+pages to use general engines for requirements searches.
+
+1. Install and start Docker Desktop with Linux containers if it is not available.
+2. Keep your existing `BRAVE_SEARCH_API_KEY` in `.env`. From the project directory run:
+
+   ```powershell
+   .\.venv\Scripts\python.exe scripts/setup_searxng.py
+   docker compose -f compose.searxng.yml up -d
+   ```
+
+   The generator creates ignored `.local/searxng/settings.yml` containing your key
+   and a random server secret. It refuses to overwrite existing settings unless
+   passed `--overwrite`. After key rotation, regenerate then restart the container.
+   Never share the generated file or commit it. No key is embedded in Compose.
+3. Optional defaults in `.env`:
+
+   ```dotenv
+   SEARCH_PROVIDER=Hybrid
+   SEARXNG_URL=http://127.0.0.1:8080
+   SEARXNG_ENGINES=duckduckgo
+   ```
+
+4. Open `http://127.0.0.1:8080`, then refresh Internship Desk and choose **Hybrid**
+   in its search provider selector. Run a company requirements search and review
+   the source before applying requirements. The review and resume matching flow
+   is the same for all providers. Existing saved results remain available.
+
+The instance is bound to loopback only; this configuration disables its limiter
+for local use. Use only an instance you trust: it receives your search queries.
+General engines can fail, throttle, or return broader results, and they may not
+honor every `site:` expression. SearXNG is a metasearch service, not a job-board
+login. `braveapi` is disabled for ordinary browser searches and requested explicitly
+by Hybrid. Do not add `braveapi` to `SEARXNG_ENGINES` if you want targeted paid usage.
+The Compose image uses `latest`; review upstream changes before pulling updates.
+
+Troubleshooting:
+
+- Connection refused: start Docker Desktop and run Compose again.
+- HTTP 403: ensure `json` is enabled under `search.formats` in private settings.
+- Engine errors: inspect `docker compose -f compose.searxng.yml logs --tail 50` locally;
+  do not share logs containing credentials. Check your Brave plan/key and engine availability.
+- Stop the local service with `docker compose -f compose.searxng.yml down`.
+
+Official references: [SearXNG JSON Search API](https://docs.searxng.org/dev/search_api.html)
+and [Brave API engine settings](https://docs.searxng.org/dev/engines/online/brave.html).
+
 Choose up to **10 companies per batch**, or use **Discover next N unsearched
 companies** (default 3). Each company uses one provider request and up to 10
 results. Requests are spaced 1.1 seconds apart; failures and rate limits stop the

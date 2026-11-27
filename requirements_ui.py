@@ -9,6 +9,7 @@ import streamlit as st
 
 from company_sources import utc_now
 from partner_matcher import BraveSearch, configured_search_key
+from search_providers import provider_picker, search_client
 from requirements_search import (SOURCES, RequirementsStore, requirements_query, search_candidates,
                                  read_requirements, extract_required_section)
 
@@ -34,8 +35,9 @@ def requirements_finder(root: Path, key: str, company_name: str, *, search_name=
         role = st.text_input("Role / job keywords", value="software developer intern", key=scope + "_role", max_chars=120, disabled=disabled)
         location = st.text_input("Requirements search location", value="Philippines", key=scope + "_location", max_chars=100, disabled=disabled)
         sources = st.multiselect("Requirements search sources", SOURCES, default=SOURCES, key=scope + "_sources", disabled=disabled)
+        provider = provider_picker(root, scope + "_provider", disabled=disabled)
         api_key = configured_search_key(root)
-        if not api_key:
+        if provider == "Brave" and not api_key:
             st.info("Live search needs BRAVE_SEARCH_API_KEY in the local .env. Existing results and manual requirements remain usable.")
             st.link_button("Search API setup", "https://api-dashboard.search.brave.com/documentation/guides/authentication")
         st.caption("One provider request per click, up to 10 results. Only company, role, location, and source filters are sent; resume text and HR details stay local.")
@@ -45,17 +47,18 @@ def requirements_finder(root: Path, key: str, company_name: str, *, search_name=
             st.error("Cannot read .local/company-requirements.json. Restore that file before searching.")
             return None
         query = requirements_query(company_name, role, location, sources, search_name) if sources else ""
-        context = hashlib.sha256(json.dumps([company_name, query], ensure_ascii=False).encode()).hexdigest()
-        if st.button("Search company job requirements", key=scope + "_search", disabled=disabled or not api_key or not sources):
+        context = hashlib.sha256(json.dumps([company_name, query, provider], ensure_ascii=False).encode()).hexdigest()
+        if st.button("Search company job requirements", key=scope + "_search", disabled=disabled or (provider == "Brave" and not api_key) or not sources):
             try:
                 with st.spinner("Searching indexed job postings…"):
-                    found = search_candidates(company_name, BraveSearch(api_key).search(query), sources)
-                record = {"company_name": company_name, "query": query, "checked_at": utc_now(), "candidates": found}
+                    found = search_candidates(company_name, search_client(root, provider, brave_key=api_key).search(query), sources)
+                record = {"company_name": company_name, "query": query, "provider": provider, "checked_at": utc_now(), "candidates": found}
                 store.save("searches", context, record)
                 state["searches"][context] = record
             except (ValueError, OSError) as exc:
                 st.error(f"Requirements search stopped: {exc}")
-        saved = state["searches"].get(context)
+        legacy_context = hashlib.sha256(json.dumps([company_name, query], ensure_ascii=False).encode()).hexdigest()
+        saved = state["searches"].get(context) or state["searches"].get(legacy_context)
         if not saved:
             return None
         candidates = saved["candidates"]

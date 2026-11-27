@@ -1,3 +1,18 @@
+## 2026-11-28 — shared status overview
+
+- Status counters now appear in the shared sticky header across workspace sections. The read-only overview opens a numbered company table by status and displays recorded failure reasons. This supersedes the queue-only counter visibility described below.
+- Verification for this release uses the Python regression suite and Node table tests. Previous visual-gate findings below remain documented; this dependency release does not claim a new design-gate pass.
+
+## 2026-11-23 — feature sidebar and retained queue view
+
+- Replaced the vertically stacked feature panels with left-side navigation: Company queue, Compose & preview, Check manually sent drafts, Queue skills, Add company, Bulk import, Company sources, Partner job matcher, Gmail/CV/recipients, Batch activity, and failed-operation review.
+- Inactive feature panels remain mounted but hidden as normal navigation views. This preserves Streamlit widget inputs, resume choices, and selected company IDs while switching views. No Gmail request is made by navigation itself.
+- Queue search, status filter, page, and page size are retained in this browser tab's session storage across component reloads. Storage errors fall back gracefully. Actual company statuses remain persisted through the existing store.
+- Retained the mint palette, hairline borders, and form controls. Sidebar starts collapsed on narrow screens; use the upper-left sidebar control to open it. Queue metrics are hidden outside the queue view to keep tools compact.
+- Verification: 104 Python tests and 14 Node table tests passed, including frame recreation, rapid selections, and cycling every feature without losing unfinished forms or queue statuses. No emails were sent during this verification.
+- Browser review: inspected desktop queue at 1440px and phone navigation/tool entry at 390px. Captures are under ignored `.taste-skill/shots/sidebar-*`.
+- Design gate: **GATE: FAIL 19 (round 2 of 3)**. The automated landing-page/Streamlit checks did not pass; this is not a full design-gate approval. Open categories: container-edges, cta, focus-ring, focus-visible, heading-scale, hero-screen, moment-none, one-heading, one-section. Findings include hero/CTA rules, metric-heading scale, framework focus rules, phone target size, and container-edge rules. The separate layout checker also reported no Chrome found, while the screenshot and consistency tools did run. No waivers were added and no kit files were edited.
+
 # Company requirements search (2026-11-20)
 
 Added role/location/source search for selected partners and company-entry skills

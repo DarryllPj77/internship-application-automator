@@ -15,7 +15,7 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field
 
 from company_sources import utc_now
-from core import atomic_text, exclusive_lock, QueueConflict
+from core import atomic_text, exclusive_lock, QueueConflict, clean_company_name
 
 LEGAL_SUFFIX = re.compile(r"\s+(?:incorporated|inc|corporation|corp|limited|ltd|llc|plc|opc|company|co)$")
 CSHARP = re.compile(r"(?<!\w)c\s*#|\bc[ -]?sharp\b", re.I)
@@ -44,7 +44,7 @@ def partner_snapshot(rows, *, source_url: str, worksheet: str, first_data_row=4,
     for number, row in enumerate(rows, 1):
         if number < first_data_row or company_column >= len(row):
             continue
-        name = str(row[company_column] or "").strip()
+        name = clean_company_name(str(row[company_column] or ""))
         normalized = normalize_company(name)
         if not normalized:
             continue
@@ -205,7 +205,15 @@ class MatcherStore:
         self.path = path
 
     def load(self):
-        return json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {"directory": None, "searches": {}, "leads": {}}
+        state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {"directory": None, "searches": {}, "leads": {}}
+        # Clean existing snapshots for display without changing partner IDs or
+        # the source revision used by saved research and concurrency checks.
+        for partner in (state.get("directory") or {}).get("partners", []):
+            partner["name"] = clean_company_name(partner["name"])
+        for lead in state.get("leads", {}).values():
+            if "partner_name" in lead:
+                lead["partner_name"] = clean_company_name(lead["partner_name"])
+        return state
 
     def mutate(self, operation):
         self.path.parent.mkdir(parents=True, exist_ok=True)
