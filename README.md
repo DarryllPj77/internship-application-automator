@@ -570,11 +570,19 @@ companies and saves confirmed failures with reasons. Gmail's reply-style "You ha
 reached a limit for sending mail. Your message was not sent." is recognized using
 the checked application's thread and date; it is recorded as a sender sending-limit
 failure, not an invalid HR email. Confirmed failures open in the Failed review view.
-Only the newest 50 notices are searched per recent check; use **Check older notices**
-to work through the rest. No retry or resend is triggered.
+Selected-company checks search the date range of their latest matched attempts,
+splitting full result windows to find notices beyond the mailbox's newest 50.
+A safety-limit warning means the search was incomplete; choose fewer companies or
+review Gmail manually. Routine delivery monitoring still checks the newest 50;
+use **Check older notices** for its historical backlog. No retry or resend is triggered.
 Automatic checks run every five minutes only while the app/browser session is open;
 they never resend mail. Temporary delays remain separate from final failures.
 Monitor history and active-list snapshots stay in ignored `.local/` files.
+The delivery table defaults to **Latest check — new outcomes**. Each completed
+check replaces that view with only newly recorded or updated outcomes; if none are
+found, it shows an empty-state message. **Saved delivery history** shows recent
+older notices. Starting a manual check returns to the latest-results view. Hiding
+old rows never removes Failed companies or their saved reasons from the queue.
 
 If the newest 50-notice limit is reached, click **Check older notices**. Each click
 processes up to 50 additional unprocessed notices from a saved historical backlog,

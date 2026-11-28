@@ -88,6 +88,38 @@ def update_monitor(path, **changes):
     return state
 
 
+async def selected_notice_ids(connection, sent_matches):
+    """Search the selected attempts' date range, splitting full result windows."""
+    dates = [mail_date(message.get("date", "")) for messages in sent_matches.values() for message in messages]
+    dates = [value for value in dates if value is not None]
+    if not dates:
+        return [], False
+    start, end = int(min(dates).timestamp()), int(utcnow().timestamp()) + 2
+    if start >= end:
+        return [], False
+    windows, found, requests, incomplete = [(start, end)], {}, 0, False
+    while windows:
+        if requests >= 64:
+            incomplete = True
+            break
+        low, high = windows.pop()
+        query = f"{{from:mailer-daemon from:postmaster}} after:{low - 1} before:{high}"
+        limit = 500 if high - low <= 1 else 50
+        metadata = await connection.read_tool("search_emails", {"query": query, "maxResults": limit})
+        requests += 1
+        ids = list(dict.fromkeys(re.findall(r"^ID: ([a-fA-F0-9]+)\s*$", metadata, re.M)))
+        if metadata.strip() and not ids:
+            raise ValueError("Unrecognized selected-application notice results; no statuses changed")
+        found.update(dict.fromkeys(ids))
+        if len(ids) >= limit:
+            if high - low <= 1:
+                incomplete = True
+            else:
+                middle = (low + high) // 2
+                windows.extend(((low, middle), (middle, high)))
+    return list(found), incomplete
+
+
 async def scan_delivery_reports(store, client, state_path, *, force=False, older=False, company_ids=None, sent_matches=None):
     state_path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(state_path.with_suffix(".scan.lock")):
@@ -143,6 +175,15 @@ async def scan_delivery_reports(store, client, state_path, *, force=False, older
                 ids, remainder = pending[:50], pending[50:]
                 older_changes.update(older_pending=remainder, older_last_page=exhausted,
                                      older_exhausted=exhausted and not remainder)
+            elif scope is not None:
+                # The mailbox-wide newest-50 window can hide a selected attempt's failure.
+                # Use exact date windows and still verify the latest Sent thread below.
+                latest_matches = {}
+                for company_id, messages in sent_cache.items():
+                    dated = [message for message in messages if mail_date(message.get("date", ""))]
+                    if dated:
+                        latest_matches[company_id] = [max(dated, key=lambda message: mail_date(message["date"]))]
+                ids, truncated = await selected_notice_ids(connection, latest_matches)
             else:
                 metadata = await connection.read_tool("search_emails", {
                     "query": "{from:mailer-daemon from:postmaster} newer_than:30d", "maxResults": 50})
@@ -220,6 +261,7 @@ async def scan_delivery_reports(store, client, state_path, *, force=False, older
             older_changes["older_retry_ids"] = list(dict.fromkeys([*state.get("older_retry_ids", []), *retry_ids]))
         update_monitor(state_path, seen=list(dict.fromkeys(identity for identity in seen if identity not in retry_ids))[-2000:],
                        events=list(history.values())[-100:], last_checked_at=utcnow().isoformat(),
+                       latest_events=applied,
                        sent_thread_hints=thread_hints, **older_changes)
         return {"updated": len(applied), "inspected": inspected, "events": applied, "truncated": truncated,
                 "older_complete": older and older_changes.get("older_exhausted", False),

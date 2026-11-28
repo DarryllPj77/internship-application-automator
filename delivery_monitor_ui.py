@@ -25,6 +25,8 @@ def render_delivery_monitor(root, store, run_async):
             manual = st.button("Check delivery problems now", disabled=store.batch_lock.exists(), key="delivery_scan_now")
             older = st.button("Check older notices", disabled=store.batch_lock.exists() or bool(state.get("older_exhausted")),
                 key="delivery_scan_older", help="Continue the saved scan. Confirmed failures and reasons are stored in the company queue; no email is resent.")
+            if manual or older:
+                st.session_state.delivery_results_view = "Latest check — new outcomes"
             if message := st.session_state.pop("delivery_scan_notice", None):
                 st.success(message)
             if manual or older or enabled:
@@ -50,13 +52,24 @@ def render_delivery_monitor(root, store, run_async):
                 st.warning(f"{len(state['older_retry_ids'])} older notices could not yet be confirmed against the latest application. No failure was assumed for them; review Gmail manually.")
             if state.get("last_checked_at"):
                 st.caption("Last delivery check: " + state["last_checked_at"])
-            events = sorted(state.get("events", []), key=lambda item: item["notice_at"], reverse=True)
+            result_view = st.selectbox("Delivery results", ["Latest check — new outcomes", "Saved delivery history"],
+                                       key="delivery_results_view")
+            history_view = result_view == "Saved delivery history"
+            events = sorted(state.get("events" if history_view else "latest_events", []),
+                            key=lambda item: item["notice_at"], reverse=True)
+            st.caption("Showing recent saved checker history (up to 100 notices). All company outcomes remain in the queue." if history_view else
+                       "Only newly recorded or updated outcomes from the latest completed check appear here. Previous failures stay saved under Company queue → Failed.")
             if events:
-                st.dataframe([{"Company": item["company_name"], "To": item["recipient"],
+                st.dataframe([{"#": number, "Company": item["company_name"], "To": item["recipient"],
                     "Outcome": "Failed" if item["kind"] == "failed" else "Delivery delayed", "Short reason": item["reason"],
                     "Notice date": item["notice_at"], "Gmail notice": "https://mail.google.com/mail/u/0/#all/" + item["notice_id"]}
-                    for item in events], hide_index=True, width="stretch",
-                    column_config={"Gmail notice": st.column_config.LinkColumn("Gmail notice", display_text="Review notice")})
+                    for number, item in enumerate(events, 1)], hide_index=True, width="stretch",
+                    column_config={"#": st.column_config.NumberColumn("#", format="%d", width="small"),
+                                   "Gmail notice": st.column_config.LinkColumn("Gmail notice", display_text="Review notice")})
+            elif history_view:
+                st.info("No saved delivery history yet.")
+            else:
+                st.info("No new delivery outcomes in the latest check. Previously saved failures remain in the Failed list. This does not prove delivery.")
             st.caption("Automatic checks pause during a batch and stop when the app/browser session closes. This checker never resends an email. Delays remain separate from final failures; Gmail may already be retrying them.")
         except Exception as exc:
             st.error("Delivery check stopped: " + mail_error_message(exc))

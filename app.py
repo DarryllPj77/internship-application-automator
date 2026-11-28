@@ -307,6 +307,7 @@ def main():
             if st.button("Check Gmail Sent", disabled=job_running or STORE.batch_lock.exists() or not check_ids):
                 st.session_state.pop("sent_check_report", None)
                 st.session_state.pop("sent_check_reviewed", None)
+                st.session_state.sent_check_incomplete = False
                 try:
                     check_progress = st.progress(0, text="Connecting to Gmail…")
                     report, outcome = async_run(check_with_delivery(
@@ -314,8 +315,7 @@ def main():
                         ROOT / ".local" / "delivery-monitor.json",
                         lambda done, total: check_progress.progress(done / total, text=f"Checked {done} / {total}")))
                     st.session_state.sent_check_report = report
-                    if outcome.get("truncated"):
-                        st.warning("Only the newest 50 delivery notices were checked. Use Check older notices for earlier failures.")
+                    st.session_state.sent_check_incomplete = bool(outcome.get("truncated"))
                     if outcome.get("updated"):
                         st.session_state.sources_notice = f"Saved {outcome['updated']} confirmed delivery outcomes and reasons. No emails were sent or retried."
                         if any(item["company"]["status"] == "failed" for item in report):
@@ -323,12 +323,14 @@ def main():
                         st.rerun()
                 except Exception as exc:
                     st.error(f"Sent/delivery check stopped; review the queue before retrying: {mail_error_message(exc)}")
+            if st.session_state.get("sent_check_incomplete"):
+                st.warning("The selected-application search reached a safety limit. Some notices remain unchecked; try a smaller group of companies or review Gmail manually.")
             report = st.session_state.get("sent_check_report")
             if report is not None:
                 report = [item for item in report if item["company"]["id"] in drafted]
             if report:
                 st.dataframe([{"Company": item["company"]["company_name"],
-                    "To": item["company"]["hr_email"], "Result": "Matching sent message found" if item["matches"] else "No exact match found — status unchanged",
+                    "To": item["company"]["hr_email"], "Result": "Failed — see saved reason" if item["company"]["status"] == "failed" else "Sent copy found; delivery not confirmed" if item["matches"] else "No exact Sent match — status unchanged",
                     "Sent dates": "; ".join(m["date"] for m in item["matches"]),
                     "Current status": item["company"]["status"].title(), "Short reason": item["company"].get("status_reason", "")} for item in report],
                     hide_index=True, width="stretch")

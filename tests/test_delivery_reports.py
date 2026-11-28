@@ -23,6 +23,80 @@ def notice(*, action="failed", reason="Address not found; 550 5.1.1 account does
 
 
 class DeliveryReportTests(unittest.TestCase):
+    def test_selected_check_finds_limit_failure_beyond_newest_fifty_mailbox_notices(self):
+        from sent_checker import check_with_delivery
+        import re
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store = CompanyStore(root / "companies.json")
+            company = Company(company_name="Selected", hr_email="hr@acme.com", status="sent")
+            store._write([company])
+            sent_at = utcnow() - timedelta(minutes=3)
+            notices = {f"{i:04x}": sent_at + timedelta(seconds=i + 1) for i in range(51)}
+            target = "0000"  # Hidden by the newest fifty in the initial search.
+            async def read_tool(name, arguments):
+                if name == "search_emails":
+                    query = arguments["query"]
+                    self.assertNotIn("newer_than:30d", query)
+                    after = int(re.search(r"after:(\d+)", query)[1])
+                    before = int(re.search(r"before:(\d+)", query)[1])
+                    ids = [key for key in reversed(notices) if after < notices[key].timestamp() < before]
+                    return "\n".join("ID: " + key for key in ids[:arguments["maxResults"]])
+                identity = arguments["messageId"]
+                if identity == target:
+                    return (f"Thread ID: thread1\nSubject: Re: {SUBJECT}\nFrom: mailer-daemon@googlemail.com\n"
+                            f"Date: {format_datetime(notices[identity])}\n\nYou have reached a limit for sending mail. Your message was not sent.")
+                return notice(date=notices[identity], recipient="unrelated@example.com")
+            connection = SimpleNamespace(read_tool=AsyncMock(side_effect=read_tool), find_sent=AsyncMock(return_value=[{
+                "message_id": "sent123", "thread_id": "thread1", "date": format_datetime(sent_at)}]))
+            @asynccontextmanager
+            async def connect():
+                yield connection
+            report, result = asyncio.run(check_with_delivery(store, SimpleNamespace(connect=connect), [company],
+                sent_at.date(), root / "monitor.json"))
+            self.assertFalse(result["truncated"])
+            self.assertEqual(result["inspected"], 51)
+            self.assertEqual(store.load()[0].status, "failed")
+            self.assertIn("Gmail sending limit reached", report[0]["company"]["status_reason"])
+            searches = [call for call in connection.read_tool.call_args_list if call.args[0] == "search_emails"]
+            self.assertGreater(len(searches), 1)
+
+    def test_latest_check_hides_previous_failures_but_history_and_queue_keep_their_reasons(self):
+        from delivery_reports import update_monitor
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store = CompanyStore(root / "companies.json")
+            store._write([Company(company_name="Recorded failure", hr_email="hr@example.com", status="failed",
+                                  status_reason="Recipient inbox is full.")])
+            original = store.path.read_bytes()
+            path = root / ".local" / "delivery-monitor.json"
+            event = {"company_name": "Recorded failure", "recipient": "hr@example.com", "kind": "failed",
+                     "reason": "Recipient inbox is full.", "notice_id": "a123", "notice_at": utcnow().isoformat()}
+            update_monitor(path, events=[event], latest_events=[event], seen=["a123"])
+            async def scan(*args, **kwargs):
+                update_monitor(path, latest_events=[], last_checked_at=utcnow().isoformat())
+                return {"updated": 0, "inspected": 0, "events": []}
+            source = ("import asyncio\nfrom pathlib import Path\nfrom core import CompanyStore\n"
+                      "from delivery_monitor_ui import render_delivery_monitor\n"
+                      f"root = Path({str(root)!r})\n"
+                      "render_delivery_monitor(root, CompanyStore(root / 'companies.json'), asyncio.run)")
+            with patch("delivery_monitor_ui.scan_delivery_reports", side_effect=scan):
+                app = AppTest.from_string(source, default_timeout=30).run()
+                self.assertEqual(len(app.dataframe), 1)
+                next(b for b in app.button if b.label == "Check delivery problems now").click().run()
+                self.assertFalse(app.exception)
+                self.assertFalse(app.dataframe)
+                self.assertTrue(any("No new delivery outcomes" in item.value for item in app.info))
+                view = lambda: next(s for s in app.selectbox if s.label == "Delivery results")
+                view().select("Saved delivery history").run()
+                self.assertEqual(app.dataframe[0].value.iloc[0]["Short reason"], "Recipient inbox is full.")
+                self.assertEqual(app.dataframe[0].value.iloc[0]["#"], 1)
+                next(b for b in app.button if b.label == "Check delivery problems now").click().run()
+                self.assertEqual(view().value, "Latest check — new outcomes")
+                self.assertFalse(app.dataframe)
+                self.assertEqual(store.path.read_bytes(), original)
+                self.assertEqual(load_monitor(path)["events"], [event])
+
     def test_gmail_sending_limit_reply_is_a_sender_failure_not_a_bad_address(self):
         text = (f"Thread ID: thread1\nSubject: Re: {SUBJECT}\n"
                 f"From: Mail Delivery Subsystem <mailer-daemon@googlemail.com>\nDate: {format_datetime(utcnow())}\n\n"
@@ -243,6 +317,9 @@ class DeliveryReportTests(unittest.TestCase):
         self.assertEqual(saved.delivery_outbound_id, "sent123")
         self.assertEqual(result["updated"], 1)
         self.assertEqual(asyncio.run(scan_delivery_reports(store, client, path, force=True))["updated"], 0)
+        self.assertEqual(load_monitor(path)["latest_events"], [])
+        self.assertEqual(len(load_monitor(path)["events"]), 1)
+        self.assertEqual(store.load()[0].status_reason, "Recipient email address was not found.")
 
     def test_delay_is_not_a_failure_or_an_automatic_resend(self):
         store, _, _, _ = self.scan({"a123": notice(action="delayed")}, status="drafted")
