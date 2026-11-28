@@ -18,7 +18,7 @@ from ui import company_table, preview_metadata, status_pill, stylesheet
 from sources_ui import render_sources
 from matcher_ui import render_matcher
 from skills_ui import relevant_skills_picker
-from sent_checker import check_drafted, apply_sent_checks
+from sent_checker import check_drafted, apply_sent_checks, check_with_delivery
 from workspace_navigation import navigate
 from active_partners_ui import render_active_partner_source
 from mail_errors import mail_error_message
@@ -284,7 +284,9 @@ def main():
     with st.container(key="view_checker"):
         render_delivery_monitor(ROOT, STORE, async_run)
         with st.expander("Review sent emails and delivery outcomes", expanded=True):
-            st.caption("Read Gmail Sent for matching recipients and the fixed application subject, then review matches before updating your queue. Missing drafts are never treated as sent. This does not send emails or prove delivery to an inbox.")
+            st.caption("Check Gmail Sent and delivery notices for the selected companies. Confirmed failures, including Gmail sending-limit notices, are saved automatically with reasons. Review other Sent matches before changing their status. This never sends or retries emails and does not prove inbox delivery.")
+            if next_status := st.session_state.pop("sent_check_next_status", None):
+                st.session_state.sent_check_status_filter = next_status
             review_status = st.selectbox("Company status to review", ["Drafted", "Sent", "Failed"],
                 key="sent_check_status_filter", disabled=job_running)
             drafted = {c.id: c for c in companies if c.status == review_status.lower() and not c.needs_review}
@@ -307,11 +309,20 @@ def main():
                 st.session_state.pop("sent_check_reviewed", None)
                 try:
                     check_progress = st.progress(0, text="Connecting to Gmail…")
-                    st.session_state.sent_check_report = async_run(check_drafted(
-                        GmailMCPClient(), [drafted[identity] for identity in check_ids], since,
+                    report, outcome = async_run(check_with_delivery(
+                        STORE, GmailMCPClient(), [drafted[identity] for identity in check_ids], since,
+                        ROOT / ".local" / "delivery-monitor.json",
                         lambda done, total: check_progress.progress(done / total, text=f"Checked {done} / {total}")))
+                    st.session_state.sent_check_report = report
+                    if outcome.get("truncated"):
+                        st.warning("Only the newest 50 delivery notices were checked. Use Check older notices for earlier failures.")
+                    if outcome.get("updated"):
+                        st.session_state.sources_notice = f"Saved {outcome['updated']} confirmed delivery outcomes and reasons. No emails were sent or retried."
+                        if any(item["company"]["status"] == "failed" for item in report):
+                            st.session_state.sent_check_next_status = "Failed"
+                        st.rerun()
                 except Exception as exc:
-                    st.error(f"Sent check stopped; no statuses changed: {mail_error_message(exc)}")
+                    st.error(f"Sent/delivery check stopped; review the queue before retrying: {mail_error_message(exc)}")
             report = st.session_state.get("sent_check_report")
             if report is not None:
                 report = [item for item in report if item["company"]["id"] in drafted]
@@ -333,6 +344,7 @@ def main():
                     reasons = {"Choose a reason": "", "Address not found": "Recipient email address was not found.",
                         "Recipient inbox full": "Recipient inbox is full.",
                         "Recipient server unreachable": "Recipient mail server could not be reached; delivery failed.",
+                        "Gmail sending limit reached": "Gmail sending limit reached; message was not sent. Review before retrying.",
                         "Message blocked / rejected": "Recipient server blocked or rejected the message.", "Other": ""}
                     preset = st.selectbox("Failure reason", list(reasons), key="sent_review_reason_preset")
                     reason = st.text_input("Short delivery reason", value=reasons[preset], max_chars=300, key="sent_review_reason_" + preset)

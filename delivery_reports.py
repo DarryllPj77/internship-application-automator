@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from email.utils import getaddresses, parsedate_to_datetime
 
-from core import Company, EMAIL, QueueConflict, atomic_text, exclusive_lock
+from core import Company, EMAIL, SUBJECT, QueueConflict, atomic_text, exclusive_lock
 
 
 def utcnow():
@@ -29,15 +29,19 @@ def parse_notice(identity, text):
     senders = getaddresses([headers.get("From", "")])
     if len(senders) != 1 or not re.fullmatch(r"(?:mailer-daemon|postmaster)(?:[+\w.-]*)", senders[0][1].split("@")[0], re.I):
         return None
-    if not re.search(r"delivery status notification|undeliverable|mail delivery|delivery fail", headers.get("Subject", ""), re.I):
-        return None
     # Ignore quoted original-message content when deciding the delivery outcome.
     diagnostic = re.split(r"Original Message (?:Details|Headers)|Attachments \(\d+\):", body, maxsplit=1, flags=re.I)[0]
+    limit_notice = (senders[0][1].casefold() in ("mailer-daemon@googlemail.com", "mailer-daemon@gmail.com")
+        and re.sub(r"^(?:re:\s*)+", "", headers.get("Subject", ""), flags=re.I) == SUBJECT
+        and re.sub(r"\s+", " ", diagnostic).strip().casefold().startswith(
+            "you have reached a limit for sending mail. your message was not sent."))
+    if not limit_notice and not re.search(r"delivery status notification|undeliverable|mail delivery|delivery fail", headers.get("Subject", ""), re.I):
+        return None
     recipients = re.findall(r"^Final-Recipient:\s*rfc822;\s*(" + EMAIL.pattern + r")", diagnostic, re.I | re.M)
     if not recipients:
         recipients = re.findall(r"(?:your message (?:wasn't delivered to|couldn't be delivered to|to)|delivering your message to)\s+(" + EMAIL.pattern + r")", diagnostic, re.I)
     recipients = {address.casefold() for address in recipients}
-    if len(recipients) != 1:
+    if not limit_notice and len(recipients) != 1:
         return None
     action = re.findall(r"^Action:\s*(\w+)", diagnostic, re.I | re.M)
     action = {value.lower() for value in action}
@@ -46,7 +50,9 @@ def parse_notice(identity, text):
     lower = diagnostic.casefold()
     delayed = action == {"delayed"} or (not action and ("(delay)" in headers.get("Subject", "").lower() or "gmail will retry" in lower))
     failed = action == {"failed"} or (not action and ("(failure)" in headers.get("Subject", "").lower() or headers.get("Subject", "").lower().startswith("undeliverable:")))
-    if delayed:
+    if limit_notice:
+        kind, reason = "failed", "Gmail sending limit reached; message was not sent. Review before retrying."
+    elif delayed:
         kind, reason = "delayed", "Delivery delayed; Gmail reported a temporary problem. No final failure confirmed."
     elif failed:
         kind = "failed"
@@ -65,7 +71,7 @@ def parse_notice(identity, text):
     date = mail_date(headers.get("Date", ""))
     if not date or not headers.get("Thread ID"):
         return None
-    return {"notice_id": identity, "thread_id": headers["Thread ID"], "recipient": next(iter(recipients)),
+    return {"notice_id": identity, "thread_id": headers["Thread ID"], "recipient": None if limit_notice else next(iter(recipients)),
             "kind": kind, "reason": reason, "notice_at": date.isoformat()}
 
 
@@ -82,28 +88,32 @@ def update_monitor(path, **changes):
     return state
 
 
-async def scan_delivery_reports(store, client, state_path, *, force=False, older=False):
+async def scan_delivery_reports(store, client, state_path, *, force=False, older=False, company_ids=None, sent_matches=None):
     state_path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(state_path.with_suffix(".scan.lock")):
         if store.batch_lock.exists():
             return {"updated": 0, "skipped": "A batch is running; delivery checking will wait."}
         state = load_monitor(state_path)
         last = datetime.fromisoformat(state["last_checked_at"]) if state.get("last_checked_at") else None
-        if not older and not force and last and (utcnow() - last).total_seconds() < 300:
+        if company_ids is None and not older and not force and last and (utcnow() - last).total_seconds() < 300:
             return {"updated": 0}
         if older and state.get("older_exhausted"):
             return {"updated": 0, "inspected": 0, "older_complete": True}
         companies = store.load()
+        scope = set(company_ids) if company_ids is not None else None
         by_email = {}
         for company in companies:
+            if scope is not None and company.id not in scope:
+                continue
             if company.status != "pending" and (company.status in ("sent", "drafted") or company.delivery_state in ("failed", "delayed")):
                 by_email.setdefault(company.hr_email.casefold(), []).append(company)
         if not by_email:
             return {"updated": 0, "skipped": "No submitted or drafted applications to check."}
         seen = list(state.get("seen", []))
-        known = set(seen)
+        known = set(seen) if scope is None else set()  # Explicit checks revisit notices skipped by older parsers.
         retry_ids = set()
-        events, sent_cache = {}, {}
+        events, sent_cache = {}, dict(sent_matches or {})
+        thread_hints = {**state.get("sent_thread_hints", {}), **(sent_matches or {})}
         inspected = 0
         older_changes = {}
         async with client.connect() as connection:
@@ -149,8 +159,15 @@ async def scan_delivery_reports(store, client, state_path, *, force=False, older
                 seen.append(identity)
                 if not notice:
                     continue
-                matches = by_email.get(notice["recipient"], [])
+                if notice["recipient"] is None:
+                    matches = [company for group in by_email.values() for company in group
+                               if any(message.get("thread_id") == notice["thread_id"]
+                                      for message in thread_hints.get(company.id, []))]
+                else:
+                    matches = by_email.get(notice["recipient"], [])
                 if len(matches) != 1:
+                    if scope is not None or notice["recipient"] is None:
+                        retry_ids.add(identity)
                     continue
                 company = matches[0]
                 if company.id not in sent_cache:
@@ -175,7 +192,7 @@ async def scan_delivery_reports(store, client, state_path, *, force=False, older
                         continue
                     if company.delivery_notice_at and notice["notice_at"] <= company.delivery_notice_at:
                         continue
-                event = {**notice, "company_id": company.id, "company_name": company.company_name,
+                event = {**notice, "recipient": company.hr_email, "company_id": company.id, "company_name": company.company_name,
                          "outbound_id": latest["message_id"]}
                 previous = events.get(company.id)
                 if previous and (previous["kind"] == "failed" and event["kind"] != "failed" or previous["kind"] == event["kind"] and previous["notice_at"] >= event["notice_at"]):
@@ -201,8 +218,9 @@ async def scan_delivery_reports(store, client, state_path, *, force=False, older
         history.update({event["notice_id"]: event for event in applied})
         if older and retry_ids:
             older_changes["older_retry_ids"] = list(dict.fromkeys([*state.get("older_retry_ids", []), *retry_ids]))
-        update_monitor(state_path, seen=[identity for identity in seen if identity not in retry_ids][-2000:],
-                       events=list(history.values())[-100:], last_checked_at=utcnow().isoformat(), **older_changes)
+        update_monitor(state_path, seen=list(dict.fromkeys(identity for identity in seen if identity not in retry_ids))[-2000:],
+                       events=list(history.values())[-100:], last_checked_at=utcnow().isoformat(),
+                       sent_thread_hints=thread_hints, **older_changes)
         return {"updated": len(applied), "inspected": inspected, "events": applied, "truncated": truncated,
                 "older_complete": older and older_changes.get("older_exhausted", False),
                 "older_unresolved": len(older_changes.get("older_retry_ids", state.get("older_retry_ids", [])))}

@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
-from core import Company, CompanyStore
+from core import Company, CompanyStore, SUBJECT
 from delivery_reports import load_monitor, parse_notice, scan_delivery_reports, utcnow
 from sent_checker import apply_sent_checks
 
@@ -23,6 +23,81 @@ def notice(*, action="failed", reason="Address not found; 550 5.1.1 account does
 
 
 class DeliveryReportTests(unittest.TestCase):
+    def test_gmail_sending_limit_reply_is_a_sender_failure_not_a_bad_address(self):
+        text = (f"Thread ID: thread1\nSubject: Re: {SUBJECT}\n"
+                f"From: Mail Delivery Subsystem <mailer-daemon@googlemail.com>\nDate: {format_datetime(utcnow())}\n\n"
+                "You have reached a limit for sending mail. Your message was not sent.\r\r\n"
+                "Quoted original application text.")
+        parsed = parse_notice("a123", text)
+        self.assertEqual(parsed["kind"], "failed")
+        self.assertIsNone(parsed["recipient"])
+        self.assertIn("Gmail sending limit reached", parsed["reason"])
+        self.assertNotIn("address", parsed["reason"])
+        self.assertIsNone(parse_notice("a123", text.replace("mailer-daemon@googlemail.com", "mailer-daemon@other.com")))
+        self.assertIsNone(parse_notice("a123", text.replace("Subject: Re: " + SUBJECT, "Subject: Unrelated")))
+        self.assertIsNone(parse_notice("a123", text.replace("You have reached", "The original email said: You have reached")))
+
+    def test_check_sent_saves_sending_limit_and_reason_and_preserves_unselected_companies(self):
+        from sent_checker import check_with_delivery
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store = CompanyStore(root / "companies.json")
+            checked = Company(company_name="Checked", hr_email="hr@acme.com", status="sent", last_result="original receipt")
+            untouched = Company(company_name="Other", hr_email="other@acme.com", status="sent")
+            store._write([checked, untouched])
+            text = (f"Thread ID: thread1\nSubject: Re: {SUBJECT}\nFrom: mailer-daemon@googlemail.com\n"
+                    f"Date: {format_datetime(utcnow())}\n\nYou have reached a limit for sending mail. Your message was not sent.")
+            async def read_tool(name, arguments):
+                return "ID: a123\n" if name == "search_emails" else text
+            connection = SimpleNamespace(read_tool=AsyncMock(side_effect=read_tool), find_sent=AsyncMock(return_value=[{
+                "message_id": "sent123", "thread_id": "thread1", "date": format_datetime(utcnow() - timedelta(hours=1))}]))
+            @asynccontextmanager
+            async def connect():
+                yield connection
+            client = SimpleNamespace(connect=connect)
+            state = root / ".local" / "delivery-monitor.json"
+            report, result = asyncio.run(check_with_delivery(store, client, [checked], utcnow().date(), state))
+            self.assertEqual(result["updated"], 1)
+            self.assertEqual(report[0]["company"]["status"], "failed")
+            self.assertIn("Gmail sending limit reached", report[0]["company"]["status_reason"])
+            self.assertEqual(store.load()[0].last_result, "original receipt")
+            self.assertEqual(store.load()[1], untouched)
+            self.assertTrue(all(call.args[0] in ("search_emails", "read_email") for call in connection.read_tool.call_args_list))
+            # A newer send in a different thread prevents an old limit reply from changing status.
+            store._write([checked, untouched])
+            connection.find_sent.return_value = [{"message_id": "new123", "thread_id": "new-thread", "date": format_datetime(utcnow())}]
+            _, result = asyncio.run(check_with_delivery(store, client, [checked], utcnow().date(), state))
+            self.assertEqual(result["updated"], 0)
+            self.assertEqual(store.load()[0].status, "sent")
+
+    def test_check_sent_button_opens_failed_view_for_confirmed_sending_limit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store = CompanyStore(root / "companies.json")
+            company = Company(company_name="Acme", hr_email="hr@acme.com", status="sent")
+            store._write([company])
+            (root / "template.txt").write_text("Hello {company_name}", encoding="utf-8")
+            text = (f"Thread ID: thread1\nSubject: Re: {SUBJECT}\nFrom: mailer-daemon@googlemail.com\n"
+                    f"Date: {format_datetime(utcnow())}\n\nYou have reached a limit for sending mail. Your message was not sent.")
+            async def read_tool(name, arguments):
+                return "ID: a123\n" if name == "search_emails" else text
+            connection = SimpleNamespace(read_tool=AsyncMock(side_effect=read_tool), find_sent=AsyncMock(return_value=[{
+                "message_id": "sent123", "thread_id": "thread1", "date": format_datetime(utcnow() - timedelta(hours=1))}]))
+            @asynccontextmanager
+            async def connect():
+                yield connection
+            source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+            source = source.replace("ROOT = Path(__file__).resolve().parent", f"ROOT = Path({str(root)!r})")
+            with patch("mcp_client.GmailMCPClient", return_value=SimpleNamespace(connect=connect)):
+                app = AppTest.from_string(source, default_timeout=30).run()
+                next(s for s in app.selectbox if s.label == "Company status to review").select("Sent").run()
+                next(m for m in app.multiselect if m.key == "sent_check_companies").set_value([company.id]).run()
+                next(b for b in app.button if b.label == "Check Gmail Sent").click().run()
+                self.assertFalse(app.exception)
+                self.assertEqual(next(s for s in app.selectbox if s.label == "Company status to review").value, "Failed")
+                self.assertEqual(store.load()[0].status, "failed")
+                self.assertIn("Gmail sending limit reached", store.load()[0].status_reason)
+
     def test_older_button_requests_read_only_history_scan(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

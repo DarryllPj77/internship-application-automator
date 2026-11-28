@@ -1,5 +1,18 @@
-"""Read-only sent-message discovery and explicitly reviewed queue reconciliation."""
+"""Gmail read-only checks and local confirmed-failure/status reconciliation; never sends mail."""
 from core import Company, QueueConflict
+
+
+async def check_with_delivery(store, client, companies, since, state_path, progress=lambda *_: None):
+    """Inspect Sent and persist only independently confirmed delivery failures."""
+    from delivery_reports import scan_delivery_reports
+    report = await check_drafted(client, companies, since, progress)
+    outcome = await scan_delivery_reports(store, client, state_path, force=True,
+        company_ids=[company.id for company in companies],
+        sent_matches={item["company"]["id"]: item["matches"] for item in report})
+    current = {company.id: company.model_dump() for company in store.load()}
+    for item in report:
+        item["company"] = current.get(item["company"]["id"], item["company"])
+    return report, outcome
 
 
 async def check_drafted(client, companies, since, progress=lambda *_: None):

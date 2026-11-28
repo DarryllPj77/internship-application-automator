@@ -565,6 +565,13 @@ sending through the resend flow. It never retries automatically.
 **Check sent drafts** defaults to Drafted companies. Select Sent or Failed separately
 when correcting recorded outcomes. The optional delivery checker matches Gmail
 failure notices to the latest application by recipient, subject, thread, and date.
+Clicking **Check Gmail Sent** also checks recent delivery notices for those selected
+companies and saves confirmed failures with reasons. Gmail's reply-style "You have
+reached a limit for sending mail. Your message was not sent." is recognized using
+the checked application's thread and date; it is recorded as a sender sending-limit
+failure, not an invalid HR email. Confirmed failures open in the Failed review view.
+Only the newest 50 notices are searched per recent check; use **Check older notices**
+to work through the rest. No retry or resend is triggered.
 Automatic checks run every five minutes only while the app/browser session is open;
 they never resend mail. Temporary delays remain separate from final failures.
 Monitor history and active-list snapshots stay in ignored `.local/` files.
