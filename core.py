@@ -374,12 +374,15 @@ def import_companies(raw: bytes, filename: str, existing: list[Company]) -> list
     return result
 
 
-async def run_batch(store, client, companies, template, cv_path, mode, emit, sleep=asyncio.sleep, *, cc=None, bcc=None, resend_ids=None):
+async def run_batch(store, client, companies, template, cv_path, mode, emit, sleep=asyncio.sleep, *, cc=None, bcc=None, resend_ids=None, failed_draft_ids=None):
     """emit receives log/progress/countdown events; no automatic retry of mail calls."""
     if mode not in ("draft", "send"):
         raise ValueError("Unknown execution mode")
     if not companies:
         raise ValueError("Select at least one company")
+    if failed_draft_ids and (mode != "draft" or set(failed_draft_ids) != {c.id for c in companies}
+                             or any(c.status != "failed" for c in companies)):
+        raise ValueError("Failed-company draft batches must use Draft Mode and the exact selected Failed companies")
     authorized_resends = set(resend_ids or [])
     if authorized_resends and (mode != "draft" or authorized_resends != {c.id for c in companies}
                               or any(c.status != "sent" for c in companies)):

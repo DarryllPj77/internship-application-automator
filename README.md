@@ -550,8 +550,15 @@ API reference: [Brave Web Search](https://api-dashboard.search.brave.com/documen
 ### Application status and delivery review
 
 The shared header shows Pending, Drafted, Sent, and Failed totals. **View companies
-by status** opens a read-only numbered table with descriptions and recorded failure
-reasons. Sent companies cannot be selected for another draft or send batch.
+by status** opens a numbered table with descriptions and recorded failure reasons.
+For **Failed**, choose a **Failure description**, then tick individual rows or use
+**Select all filtered** (and **Clear selection** to undo). **Prepare drafts for
+selected** opens Batch activity with only those contacts. Click **Review failed-company
+drafts**, check the preview and recipients, and confirm. This route always creates
+Gmail drafts, even when Send Mode is enabled. Records remain Failed until draft
+creation succeeds; unselected failures keep their reasons. Companies with uncertain
+previous operations must be reviewed first and are skipped by Select all.
+Normal queue selection blocks Sent companies from another draft or send batch.
 
 To prepare another application, click **Create resend drafts…** in Company queue.
 In Batch activity, manually choose the Sent companies, then click **Review resend

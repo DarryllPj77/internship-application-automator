@@ -86,6 +86,9 @@ def update_uploaded_cv():
 @st.dialog("Confirm application batch", width="large", on_dismiss=dismiss_confirmation)
 def confirm_batch(job):
     resending = bool(job.get("resend_ids"))
+    if job.get("failed_draft_ids") and job["mode"] != "draft":
+        st.error("Failed-company retry batches create drafts only.")
+        return
     if any(c.status == "sent" for c in job["companies"]) and not (
             resending and job["mode"] == "draft" and set(job["resend_ids"]) == {c.id for c in job["companies"]}
             and all(c.status == "sent" for c in job["companies"])):
@@ -538,6 +541,30 @@ def main():
                             "resend_ids": list(resend_chosen)}
                     except Exception as exc:
                         st.error(str(exc))
+            if failed_ids := st.session_state.get("failed_redraft_request"):
+                failed_by_id = {c.id: c for c in companies if c.status == "failed" and not c.needs_review}
+                failed_companies = [failed_by_id[identity] for identity in failed_ids if identity in failed_by_id]
+                with st.expander("Create drafts for selected Failed companies", expanded=True):
+                    st.caption("These companies were chosen in the status overview. This always creates drafts, regardless of the Send Mode toggle. Review and send them manually in Gmail.")
+                    if len(failed_companies) != len(failed_ids):
+                        st.warning("Some selected companies changed status or need manual review and have been excluded.")
+                    st.dataframe([{"#": number, "Company": c.company_name, "To": c.hr_email,
+                                   "Failure reason": c.status_reason or "No reason recorded"}
+                                  for number, c in enumerate(failed_companies, 1)], hide_index=True, width="stretch")
+                    if st.button("Clear failed draft selection", disabled=job_running):
+                        st.session_state.pop("failed_redraft_request", None)
+                        dismiss_confirmation()
+                        st.rerun()
+                    if st.button(f"Review failed-company drafts ({len(failed_companies)})", key="review_failed_drafts",
+                                 disabled=not failed_companies or not pdf_valid or not copies_valid or job_running):
+                        try:
+                            for company in failed_companies:
+                                email_payload(company, template, cv_path, cc=copy_settings.cc, bcc=copy_settings.bcc)
+                            st.session_state.confirmation_job = {"companies": failed_companies, "template": template,
+                                "cv_path": cv_path, "mode": "draft", "cc": list(copy_settings.cc), "bcc": list(copy_settings.bcc),
+                                "failed_draft_ids": [c.id for c in failed_companies]}
+                        except Exception as exc:
+                            st.error(str(exc))
             if "confirmation_job" in st.session_state:
                 confirm_batch(st.session_state.confirmation_job)
             progress = st.progress(0, text="Ready when you are")
@@ -569,6 +596,8 @@ def main():
                     st.session_state.selected_ids = []
                     if job.get("resend_ids"):
                         st.session_state.resend_reset = True
+                    if job.get("failed_draft_ids"):
+                        st.session_state.pop("failed_redraft_request", None)
                 reload_table()
             if logs:
                 st.download_button("Download activity log", "\n".join(logs), file_name="internship-activity.txt", mime="text/plain")

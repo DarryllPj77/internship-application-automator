@@ -22,6 +22,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ApplicationTests(unittest.TestCase):
+    def test_failed_overview_draft_request_cannot_send_or_include_other_statuses(self):
+        failed = self.company.model_copy(update={"status": "failed", "status_reason": "Sending limit"})
+        self.store._write([failed])
+        client = SimpleNamespace(connect=lambda: self.fail("Invalid failed draft request must not connect"))
+        for mode, rows, ids in (("send", [failed], [failed.id]), ("draft", [self.company], [self.company.id]),
+                                ("draft", [failed], ["wrong"])):
+            with self.assertRaises(ValueError):
+                asyncio.run(run_batch(self.store, client, rows, "Hi", str(self.pdf), mode, lambda *args: None,
+                    failed_draft_ids=ids))
+        self.assertEqual(self.store.load()[0], failed)
+
     def test_resend_requires_exact_explicit_sent_recipients_and_draft_mode(self):
         sent = self.company.model_copy(update={"status": "sent"})
         self.store._write([sent])
@@ -344,6 +355,38 @@ class ApplicationTests(unittest.TestCase):
 
 
 class DashboardTests(unittest.TestCase):
+    def test_failed_overview_selection_creates_only_selected_drafts_even_in_send_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            failed = Company(company_name="Retry draft", hr_email="retry@example.com", status="failed", status_reason="Sending limit")
+            other = Company(company_name="Keep failure", hr_email="other@example.com", status="failed", status_reason="Inbox full")
+            store = CompanyStore(root / "companies.json")
+            store._write([failed, other])
+            atomic_text(root / "template.txt", "Hello {company_name}")
+            pdf = root / "CV.pdf"
+            pdf.write_bytes(b"%PDF-1.4\n%%EOF")
+            code = (ROOT / "app.py").read_text(encoding="utf-8").replace(
+                "ROOT = Path(__file__).resolve().parent", f"ROOT = Path({str(root)!r})")
+            environment = {"CV_FILE_PATH": str(pdf), "MCP_SERVER_COMMAND": sys.executable,
+                           "MCP_SERVER_ARGS": json.dumps([str(ROOT / "tests" / "fake_mcp_server.py")])}
+            with patch.dict(os.environ, environment):
+                app = AppTest.from_string(code, default_timeout=30)
+                app.session_state.failed_redraft_request = [failed.id]
+                app.session_state.send_mode = True
+                app.run()
+                next(b for b in app.button if b.key == "review_failed_drafts").click().run()
+                self.assertFalse(app.exception)
+                self.assertEqual(app.session_state.confirmation_job["mode"], "draft")
+                self.assertEqual(app.session_state.confirmation_job["failed_draft_ids"], [failed.id])
+                self.assertEqual(store.load(), [failed, other])
+                next(c for c in app.checkbox if c.label.startswith("I reviewed To")).check().run()
+                next(b for b in app.button if b.label == "Confirm and start").click().run()
+                self.assertFalse(app.exception)
+                saved = store.load()
+                self.assertEqual(saved[0].status, "drafted")
+                self.assertIn("fixture-draft-id", saved[0].last_result)
+                self.assertEqual(saved[1], other)
+
     def test_resend_flow_always_creates_drafts_even_when_send_mode_is_enabled(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
