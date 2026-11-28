@@ -22,12 +22,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ApplicationTests(unittest.TestCase):
-    def test_resend_requires_exact_explicit_sent_recipients_and_send_mode(self):
+    def test_resend_requires_exact_explicit_sent_recipients_and_draft_mode(self):
         sent = self.company.model_copy(update={"status": "sent"})
         self.store._write([sent])
         client = SimpleNamespace(connect=lambda: self.fail("Invalid resend must not connect"))
-        for mode, ids, rows in (("draft", [sent.id], [sent]), ("send", ["wrong"], [sent]),
-                                ("send", [sent.id, "extra"], [sent]), ("send", [sent.id], [self.company])):
+        for mode, ids, rows in (("send", [sent.id], [sent]), ("draft", ["wrong"], [sent]),
+                                ("draft", [sent.id, "extra"], [sent]), ("draft", [sent.id], [self.company])):
             with self.assertRaises(ValueError):
                 asyncio.run(run_batch(self.store, client, rows, "Hi", str(self.pdf), mode,
                     lambda *args: None, resend_ids=ids))
@@ -37,14 +37,14 @@ class ApplicationTests(unittest.TestCase):
             async def connect(self):
                 yield self
             def require_tool(self, mode):
-                return SimpleNamespace(name="send_email")
+                return SimpleNamespace(name="draft_email")
             async def deliver(self, mode, payload):
                 calls.append((mode, payload["to"]))
-                return "Resent offline"
-        asyncio.run(run_batch(self.store, ResendClient(), [sent], "Hi", str(self.pdf), "send",
+                return "Draft created offline"
+        asyncio.run(run_batch(self.store, ResendClient(), [sent], "Hi", str(self.pdf), "draft",
             lambda *args: None, resend_ids=[sent.id]))
-        self.assertEqual(calls, [("send", [sent.hr_email])])
-        self.assertEqual(self.store.load()[0].status, "sent")
+        self.assertEqual(calls, [("draft", [sent.hr_email])])
+        self.assertEqual(self.store.load()[0].status, "drafted")
 
     def test_sent_company_blocks_entire_draft_or_send_batch_before_connection(self):
         sent = self.company.model_copy(update={"id": "already-sent", "hr_email": "sent@acme.com", "status": "sent"})
@@ -344,7 +344,7 @@ class ApplicationTests(unittest.TestCase):
 
 
 class DashboardTests(unittest.TestCase):
-    def test_resend_flow_requires_user_selection_send_mode_and_extra_confirmation(self):
+    def test_resend_flow_always_creates_drafts_even_when_send_mode_is_enabled(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sent = Company(company_name="Resend target", hr_email="hr@example.com", status="sent")
@@ -361,13 +361,13 @@ class DashboardTests(unittest.TestCase):
             with patch.dict(os.environ, environment):
                 app = AppTest.from_string(code, default_timeout=30).run()
                 button = lambda label: next(b for b in app.button if b.label == label)
-                button("Resend sent emails…").click().run()
+                button("Create resend drafts…").click().run()
                 self.assertEqual(app.session_state.workspace_section, "batch")
                 self.assertEqual(app.session_state.resend_company_ids, [])
                 next(m for m in app.multiselect if m.key == "resend_company_ids").set_value([sent.id]).run()
-                self.assertTrue(button("Review resend (1)").disabled)
+                self.assertFalse(button("Review resend drafts (1)").disabled)
                 next(t for t in app.toggle if t.key == "send_mode").set_value(True).run()
-                button("Review resend (1)").click().run()
+                button("Review resend drafts (1)").click().run()
                 self.assertFalse(app.exception)
                 self.assertEqual(store.load(), [sent, other])
                 next(c for c in app.checkbox if c.label.startswith("I reviewed To")).check().run()
@@ -376,8 +376,8 @@ class DashboardTests(unittest.TestCase):
                 button("Confirm and start").click().run()
                 self.assertFalse(app.exception)
                 saved = store.load()
-                self.assertEqual(saved[0].status, "sent")
-                self.assertIn("fixture-message-id", saved[0].last_result.lower())
+                self.assertEqual(saved[0].status, "drafted")
+                self.assertIn("fixture-draft-id", saved[0].last_result.lower())
                 self.assertEqual(saved[1], other)
                 self.assertEqual(app.session_state.resend_company_ids, [])
 

@@ -87,11 +87,11 @@ def update_uploaded_cv():
 def confirm_batch(job):
     resending = bool(job.get("resend_ids"))
     if any(c.status == "sent" for c in job["companies"]) and not (
-            resending and job["mode"] == "send" and set(job["resend_ids"]) == {c.id for c in job["companies"]}
+            resending and job["mode"] == "draft" and set(job["resend_ids"]) == {c.id for c in job["companies"]}
             and all(c.status == "sent" for c in job["companies"])):
         st.error("Already Sent companies cannot be drafted or sent again. Clear the selection and choose unsent companies.")
         return
-    verb = "Resend emails" if resending else "Send emails" if job["mode"] == "send" else "Create Gmail drafts"
+    verb = "Create resend drafts" if resending else "Send emails" if job["mode"] == "send" else "Create Gmail drafts"
     st.write(f"**{verb} for {len(job['companies'])} selected companies?**")
     st.text("CC: " + (", ".join(job.get("cc", [])) or "None") +
             "\nBCC: " + (", ".join(job.get("bcc", [])) or "None"))
@@ -108,8 +108,8 @@ def confirm_batch(job):
     acknowledged = st.checkbox("I reviewed To, CC, BCC, bodies, attachment, and the Gmail account used during OAuth.")
     resend_acknowledged = True
     if resending:
-        st.warning("These companies are already Sent. Continuing sends another email using your current template, recipients, and PDF.")
-        resend_acknowledged = st.checkbox("I intentionally want to resend to these selected companies.", key="confirm_resend_acknowledged")
+        st.info("These companies are already Sent. This creates new Gmail drafts using your current template, recipients, and PDF. Review and send them manually in Gmail.")
+        resend_acknowledged = st.checkbox("I want to create new drafts for these previously sent companies.", key="confirm_resend_acknowledged")
     if job["mode"] == "send":
         st.warning("Send Mode delivers immediately. Sent emails cannot be recalled here.")
     if st.button("Confirm and start", type="primary", disabled=not acknowledged or not resend_acknowledged):
@@ -276,7 +276,7 @@ def main():
                 st.error(f"Edits not saved: {exc}")
                 selected = []
             st.caption(f"{len(selected)} selected · {len(companies)} companies · Changes saved automatically")
-            if st.button("Resend sent emails…", key="open_resend", disabled=job_running):
+            if st.button("Create resend drafts…", key="open_resend", disabled=job_running):
                 dismiss_confirmation()
                 st.session_state.resend_requested = True
                 st.session_state.next_workspace_section = "batch"
@@ -502,27 +502,25 @@ def main():
                                                          "cc": list(copy_settings.cc), "bcc": list(copy_settings.bcc)}
                 except Exception as exc:
                     st.error(str(exc))
-            with st.expander("Resend previously sent emails", expanded=st.session_state.get("resend_requested", False)):
-                st.caption("Choose recipients manually. This sends a new email using your current template, PDF, and CC / BCC settings. Normal queue selection still blocks Sent companies.")
+            with st.expander("Create drafts for previously sent companies", expanded=st.session_state.get("resend_requested", False)):
+                st.caption("Choose recipients manually. This always creates Gmail drafts, even when Send Mode above is enabled. Review and send them yourself in Gmail. Normal queue selection still blocks Sent companies.")
                 resend_candidates = {c.id: c for c in companies if c.status == "sent" and not c.needs_review}
                 if st.session_state.pop("resend_reset", False):
                     st.session_state.resend_company_ids = []
                 elif "resend_company_ids" in st.session_state:
                     st.session_state.resend_company_ids = [identity for identity in st.session_state.resend_company_ids if identity in resend_candidates]
-                resend_chosen = st.multiselect("Sent companies to resend to", list(resend_candidates),
+                resend_chosen = st.multiselect("Sent companies to create new drafts for", list(resend_candidates),
                     format_func=lambda identity: resend_candidates[identity].company_name + " · " + resend_candidates[identity].hr_email,
                     key="resend_company_ids", on_change=dismiss_confirmation, disabled=job_running)
-                if not sending:
-                    st.caption("Enable Send Mode (Direct Send) above to review a resend.")
-                if st.button(f"Review resend ({len(resend_chosen)})", key="review_resend",
-                             disabled=not sending or not resend_chosen or not pdf_valid or not copies_valid or job_running):
+                if st.button(f"Review resend drafts ({len(resend_chosen)})", key="review_resend",
+                             disabled=not resend_chosen or not pdf_valid or not copies_valid or job_running):
                     try:
                         resend_companies = [resend_candidates[identity] for identity in resend_chosen]
                         for company in resend_companies:
                             email_payload(company, template, cv_path, cc=copy_settings.cc, bcc=copy_settings.bcc)
                         st.session_state.pop("confirm_resend_acknowledged", None)
                         st.session_state.confirmation_job = {"companies": resend_companies, "template": template,
-                            "cv_path": cv_path, "mode": "send", "cc": list(copy_settings.cc), "bcc": list(copy_settings.bcc),
+                            "cv_path": cv_path, "mode": "draft", "cc": list(copy_settings.cc), "bcc": list(copy_settings.bcc),
                             "resend_ids": list(resend_chosen)}
                     except Exception as exc:
                         st.error(str(exc))

@@ -381,9 +381,9 @@ async def run_batch(store, client, companies, template, cv_path, mode, emit, sle
     if not companies:
         raise ValueError("Select at least one company")
     authorized_resends = set(resend_ids or [])
-    if authorized_resends and (mode != "send" or authorized_resends != {c.id for c in companies}
+    if authorized_resends and (mode != "draft" or authorized_resends != {c.id for c in companies}
                               or any(c.status != "sent" for c in companies)):
-        raise ValueError("A resend batch must contain only the explicitly selected Sent companies in Send Mode")
+        raise ValueError("A resend batch must create drafts only for the explicitly selected Sent companies")
     if any(c.status == "sent" and c.id not in authorized_resends for c in companies):
         raise ValueError("Already Sent companies cannot be drafted or sent again")
     if len({c.id for c in companies}) != len(companies):
