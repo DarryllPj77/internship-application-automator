@@ -7,6 +7,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
+from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 from core import Company, CompanyStore
@@ -22,6 +23,106 @@ def notice(*, action="failed", reason="Address not found; 550 5.1.1 account does
 
 
 class DeliveryReportTests(unittest.TestCase):
+    def test_older_button_requests_read_only_history_scan(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            CompanyStore(root / "companies.json")._write([])
+            script = ("import asyncio\nfrom pathlib import Path\nfrom core import CompanyStore\n"
+                      "from delivery_monitor_ui import render_delivery_monitor\n"
+                      f"root = Path({str(root)!r})\n"
+                      "render_delivery_monitor(root, CompanyStore(root / 'companies.json'), asyncio.run)")
+            with patch("delivery_monitor_ui.scan_delivery_reports", new_callable=AsyncMock,
+                       return_value={"updated": 0, "inspected": 50}) as scan:
+                app = AppTest.from_string(script, default_timeout=30).run()
+                scan.assert_not_awaited()
+                next(button for button in app.button if button.label == "Check older notices").click().run()
+                self.assertFalse(app.exception)
+                self.assertTrue(scan.await_args.kwargs["older"])
+                self.assertTrue(scan.await_args.kwargs["force"])
+
+    def test_failed_older_read_does_not_advance_saved_progress(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store = CompanyStore(root / "companies.json")
+            store._write([Company(company_name="Acme", hr_email="hr@acme.com", status="sent")])
+            state = root / "monitor.json"
+            state.write_text('{"older_pending": ["a123", "b123"]}')
+            original = state.read_bytes()
+            queue = store.path.read_bytes()
+            connection = SimpleNamespace(read_tool=AsyncMock(side_effect=RuntimeError("Connection stopped")))
+            @asynccontextmanager
+            async def connect():
+                yield connection
+            with self.assertRaises(RuntimeError):
+                asyncio.run(scan_delivery_reports(store, SimpleNamespace(connect=connect), state, older=True))
+            self.assertEqual(state.read_bytes(), original)
+            self.assertEqual(store.path.read_bytes(), queue)
+
+    def test_older_scan_resumes_buffer_saves_reasons_and_never_touches_pending(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store = CompanyStore(root / "companies.json")
+            company = Company(company_name="Acme", hr_email="hr@acme.com", status="sent")
+            pending = Company(company_name="Waiting", hr_email="waiting@example.com", status="pending", delivery_state="failed")
+            store._write([company, pending])
+            identities = [f"{i:04x}" for i in range(1, 62)]
+            old_date = utcnow() - timedelta(days=45)
+            async def read_tool(name, args):
+                if name == "search_emails":
+                    self.assertIn("before:", args["query"])
+                    self.assertNotIn("newer_than:30d", args["query"])
+                    return "\n\n".join(f"ID: {identity}\nDate: {format_datetime(old_date)}" for identity in identities)
+                return notice(date=old_date, recipient="waiting@example.com" if args["messageId"] == identities[-1] else "hr@acme.com")
+            connection = SimpleNamespace(read_tool=AsyncMock(side_effect=read_tool), find_sent=AsyncMock(return_value=[{
+                "message_id": "sent123", "thread_id": "thread1", "date": format_datetime(old_date - timedelta(days=1))}]))
+            @asynccontextmanager
+            async def connect():
+                yield connection
+            client = SimpleNamespace(connect=connect)
+            state = root / ".local" / "delivery-monitor.json"
+            first = asyncio.run(scan_delivery_reports(store, client, state, older=True))
+            self.assertEqual(first["inspected"], 50)
+            self.assertEqual(first["updated"], 1)
+            self.assertFalse(first["older_complete"])
+            self.assertEqual(len(load_monitor(state)["older_pending"]), 11)
+            # Reloading from disk resumes the remaining batch without another search.
+            second = asyncio.run(scan_delivery_reports(store, client, state, older=True))
+            self.assertEqual(second["inspected"], 11)
+            self.assertTrue(second["older_complete"])
+            self.assertEqual(sum(call.args[0] == "search_emails" for call in connection.read_tool.call_args_list), 1)
+            self.assertEqual(store.load()[0].status, "failed")
+            self.assertIn("not found", store.load()[0].status_reason)
+            self.assertEqual(store.load()[1], pending)
+            self.assertEqual(connection.find_sent.call_args.args[1].year, 1970)
+            before = connection.read_tool.await_count
+            asyncio.run(scan_delivery_reports(store, client, state, older=True))
+            self.assertEqual(connection.read_tool.await_count, before)
+
+    def test_older_scan_overlaps_full_page_dates_and_does_not_skip_ambiguous_boundary(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store = CompanyStore(root / "companies.json")
+            store._write([Company(company_name="Acme", hr_email="hr@acme.com", status="sent")])
+            state = root / ".local" / "delivery-monitor.json"
+            date = utcnow() - timedelta(days=40)
+            metadata = "\n\n".join(f"ID: {i:04x}\nDate: {format_datetime(date)}" for i in range(500))
+            connection = SimpleNamespace(read_tool=AsyncMock(return_value=metadata))
+            @asynccontextmanager
+            async def connect():
+                yield connection
+            client = SimpleNamespace(connect=connect)
+            # Previously seen messages can advance a full older page once, with a one-second overlap.
+            state.parent.mkdir()
+            import json
+            state.write_text(json.dumps({"seen": [f"{i:04x}" for i in range(500)]}))
+            asyncio.run(scan_delivery_reports(store, client, state, older=True))
+            self.assertEqual(load_monitor(state)["older_before"], int(date.timestamp()) + 1)
+            self.assertFalse(load_monitor(state)["older_exhausted"])
+            original = state.read_bytes()
+            with self.assertRaisesRegex(ValueError, "time boundary"):
+                asyncio.run(scan_delivery_reports(store, client, state, older=True))
+            self.assertEqual(state.read_bytes(), original)
+
     def test_delayed_action_wins_over_quoted_550_error(self):
         event = parse_notice("a123", notice(action="delayed", reason="550 The server could not deliver mail. Gmail will retry."))
         self.assertEqual(event["kind"], "delayed")

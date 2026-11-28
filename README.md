@@ -560,6 +560,15 @@ Automatic checks run every five minutes only while the app/browser session is op
 they never resend mail. Temporary delays remain separate from final failures.
 Monitor history and active-list snapshots stay in ignored `.local/` files.
 
+If the newest 50-notice limit is reached, click **Check older notices**. Each click
+processes up to 50 additional unprocessed notices from a saved historical backlog,
+including notices older than 30 days. Continue until the scan reports the end of
+its search. Progress survives refreshes. Confirmed failures and their short reasons
+are saved in the queue for later review under **Failed**; Pending companies are
+left unchanged. Unconfirmed matches and ambiguous time boundaries require manual
+review rather than being silently marked failed. The table shows recent monitor
+events; the company queue retains each company's saved outcome and reason.
+
 Imports reuse existing email records and retain statuses, skills, and worksheet
 provenance. Different HR email addresses remain separate contacts. Membership reflects
 the saved worksheet, not independent confirmation of the partnership. Alternate

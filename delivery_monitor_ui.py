@@ -15,7 +15,7 @@ def render_delivery_monitor(root, store, run_async):
         st.error("Cannot read the delivery monitor state. Restore .local/delivery-monitor.json before scanning.")
         return
     with st.expander("Automatic delivery failure checker", expanded=True):
-        st.caption("Reads up to 50 newest delivery notices from the last 30 days. It updates only notices linked to the newest matching application by recipient, subject, thread, and date. Absence of a bounce never proves inbox delivery.")
+        st.caption("Routine checks read the 50 newest delivery notices from the last 30 days. Check older notices works backward through Gmail history, up to 50 notices per click. Only notices linked to the newest matching application update the queue. Absence of a bounce never proves inbox delivery.")
         choice = st.selectbox("Delivery monitoring", ["Manual checks", "Automatic every 5 minutes while app is open"],
             index=1 if state.get("enabled") else 0, key="delivery_monitor_mode")
         enabled = choice != "Manual checks"
@@ -23,20 +23,31 @@ def render_delivery_monitor(root, store, run_async):
             if enabled != bool(state.get("enabled")):
                 state = update_monitor(path, enabled=enabled)
             manual = st.button("Check delivery problems now", disabled=store.batch_lock.exists(), key="delivery_scan_now")
-            if manual or enabled:
-                with st.spinner("Checking Gmail delivery notices…") if manual else st.container():
-                    result = run_async(scan_delivery_reports(store, GmailMCPClient(), path, force=manual))
+            older = st.button("Check older notices", disabled=store.batch_lock.exists() or bool(state.get("older_exhausted")),
+                key="delivery_scan_older", help="Continue the saved scan. Confirmed failures and reasons are stored in the company queue; no email is resent.")
+            if message := st.session_state.pop("delivery_scan_notice", None):
+                st.success(message)
+            if manual or older or enabled:
+                with st.spinner("Checking Gmail delivery notices…") if manual or older else st.container():
+                    result = run_async(scan_delivery_reports(store, GmailMCPClient(), path, force=manual or older, older=older))
                 if result.get("skipped"):
                     st.caption(result["skipped"])
                 if result.get("updated"):
                     st.session_state.pop("confirmation_job", None)
                     st.session_state.sources_notice = f"Updated {result['updated']} delivery outcomes. No emails were resent."
+                    st.session_state.delivery_scan_notice = f"Saved {result['updated']} delivery outcomes with reasons. No emails were resent."
                     st.rerun()
-                if manual:
+                if manual or older:
                     st.success(f"Check complete. {result.get('inspected', 0)} new notices inspected; no new status changes.")
                 if result.get("truncated"):
-                    st.warning("The newest 50-notice limit was reached. Older notices outside this window require manual review.")
+                    st.warning("The newest 50-notice limit was reached. Use Check older notices to continue through earlier delivery notices.")
                 state = load_monitor(path)
+            if state.get("older_exhausted"):
+                st.caption("Older-notice scan reached the end of its search. Any unrecognized or unconfirmed notices still need manual review.")
+            elif state.get("older_pending") or state.get("older_before"):
+                st.caption("Older-notice progress saved. Click Check older notices again to continue, even after refreshing the app.")
+            if state.get("older_retry_ids"):
+                st.warning(f"{len(state['older_retry_ids'])} older notices could not yet be confirmed against the latest application. No failure was assumed for them; review Gmail manually.")
             if state.get("last_checked_at"):
                 st.caption("Last delivery check: " + state["last_checked_at"])
             events = sorted(state.get("events", []), key=lambda item: item["notice_at"], reverse=True)

@@ -82,19 +82,21 @@ def update_monitor(path, **changes):
     return state
 
 
-async def scan_delivery_reports(store, client, state_path, *, force=False):
+async def scan_delivery_reports(store, client, state_path, *, force=False, older=False):
     state_path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(state_path.with_suffix(".scan.lock")):
         if store.batch_lock.exists():
             return {"updated": 0, "skipped": "A batch is running; delivery checking will wait."}
         state = load_monitor(state_path)
         last = datetime.fromisoformat(state["last_checked_at"]) if state.get("last_checked_at") else None
-        if not force and last and (utcnow() - last).total_seconds() < 300:
+        if not older and not force and last and (utcnow() - last).total_seconds() < 300:
             return {"updated": 0}
+        if older and state.get("older_exhausted"):
+            return {"updated": 0, "inspected": 0, "older_complete": True}
         companies = store.load()
         by_email = {}
         for company in companies:
-            if company.status in ("sent", "drafted") or company.delivery_state in ("failed", "delayed"):
+            if company.status != "pending" and (company.status in ("sent", "drafted") or company.delivery_state in ("failed", "delayed")):
                 by_email.setdefault(company.hr_email.casefold(), []).append(company)
         if not by_email:
             return {"updated": 0, "skipped": "No submitted or drafted applications to check."}
@@ -103,12 +105,41 @@ async def scan_delivery_reports(store, client, state_path, *, force=False):
         retry_ids = set()
         events, sent_cache = {}, {}
         inspected = 0
+        older_changes = {}
         async with client.connect() as connection:
-            metadata = await connection.read_tool("search_emails", {
-                "query": "{from:mailer-daemon from:postmaster} newer_than:30d", "maxResults": 50})
-            ids = list(dict.fromkeys(re.findall(r"^ID: ([a-fA-F0-9]+)\s*$", metadata, re.M)))
-            if metadata.strip() and not ids:
-                raise ValueError("Unrecognized delivery-notice search output; no statuses changed")
+            ids = []
+            truncated = False
+            if older:
+                pending = [identity for identity in state.get("older_pending", []) if identity not in known]
+                exhausted = bool(state.get("older_last_page", False))
+                if not pending:
+                    before = int(state.get("older_before", int(utcnow().timestamp()) + 1))
+                    metadata = await connection.read_tool("search_emails", {
+                        "query": f"{{from:mailer-daemon from:postmaster}} before:{before}", "maxResults": 500})
+                    batch_ids = list(dict.fromkeys(re.findall(r"^ID: ([a-fA-F0-9]+)\s*$", metadata, re.M)))
+                    if metadata.strip() and not batch_ids:
+                        raise ValueError("Unrecognized older-notice search output; progress was not advanced")
+                    exhausted = len(batch_ids) < 500
+                    if not exhausted:
+                        dates = [mail_date(value) for value in re.findall(r"^Date: (.+)$", metadata, re.M)]
+                        if len(dates) != len(batch_ids) or any(value is None for value in dates):
+                            raise ValueError("Cannot safely date-page older notices; progress was not advanced")
+                        # Overlap the oldest second so equal-time messages are never silently skipped.
+                        boundary = int(min(dates).timestamp()) + 1
+                        if boundary >= before:
+                            raise ValueError("Too many notices share the oldest time boundary. Manual review is needed; progress was not advanced")
+                        older_changes["older_before"] = boundary
+                    pending = [identity for identity in batch_ids if identity not in known]
+                ids, remainder = pending[:50], pending[50:]
+                older_changes.update(older_pending=remainder, older_last_page=exhausted,
+                                     older_exhausted=exhausted and not remainder)
+            else:
+                metadata = await connection.read_tool("search_emails", {
+                    "query": "{from:mailer-daemon from:postmaster} newer_than:30d", "maxResults": 50})
+                ids = list(dict.fromkeys(re.findall(r"^ID: ([a-fA-F0-9]+)\s*$", metadata, re.M)))
+                if metadata.strip() and not ids:
+                    raise ValueError("Unrecognized delivery-notice search output; no statuses changed")
+                truncated = len(ids) >= 50
             for identity in ids:
                 if identity in known:
                     continue
@@ -123,7 +154,8 @@ async def scan_delivery_reports(store, client, state_path, *, force=False):
                     continue
                 company = matches[0]
                 if company.id not in sent_cache:
-                    sent_cache[company.id] = await connection.find_sent(company.hr_email, (utcnow() - timedelta(days=30)).date())
+                    sent_cache[company.id] = await connection.find_sent(company.hr_email,
+                        datetime(1970, 1, 1).date() if older else (utcnow() - timedelta(days=30)).date())
                 sent = [message for message in sent_cache[company.id] if mail_date(message.get("date", ""))]
                 if not sent:
                     retry_ids.add(identity)
@@ -167,6 +199,10 @@ async def scan_delivery_reports(store, client, state_path, *, force=False):
             store.replace(updated, current)
         history = {event["notice_id"]: event for event in state.get("events", [])}
         history.update({event["notice_id"]: event for event in applied})
+        if older and retry_ids:
+            older_changes["older_retry_ids"] = list(dict.fromkeys([*state.get("older_retry_ids", []), *retry_ids]))
         update_monitor(state_path, seen=[identity for identity in seen if identity not in retry_ids][-2000:],
-                       events=list(history.values())[-100:], last_checked_at=utcnow().isoformat())
-        return {"updated": len(applied), "inspected": inspected, "events": applied, "truncated": len(ids) >= 50}
+                       events=list(history.values())[-100:], last_checked_at=utcnow().isoformat(), **older_changes)
+        return {"updated": len(applied), "inspected": inspected, "events": applied, "truncated": truncated,
+                "older_complete": older and older_changes.get("older_exhausted", False),
+                "older_unresolved": len(older_changes.get("older_retry_ids", state.get("older_retry_ids", [])))}
