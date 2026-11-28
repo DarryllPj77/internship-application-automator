@@ -374,13 +374,17 @@ def import_companies(raw: bytes, filename: str, existing: list[Company]) -> list
     return result
 
 
-async def run_batch(store, client, companies, template, cv_path, mode, emit, sleep=asyncio.sleep, *, cc=None, bcc=None):
+async def run_batch(store, client, companies, template, cv_path, mode, emit, sleep=asyncio.sleep, *, cc=None, bcc=None, resend_ids=None):
     """emit receives log/progress/countdown events; no automatic retry of mail calls."""
     if mode not in ("draft", "send"):
         raise ValueError("Unknown execution mode")
     if not companies:
         raise ValueError("Select at least one company")
-    if any(c.status == "sent" for c in companies):
+    authorized_resends = set(resend_ids or [])
+    if authorized_resends and (mode != "send" or authorized_resends != {c.id for c in companies}
+                              or any(c.status != "sent" for c in companies)):
+        raise ValueError("A resend batch must contain only the explicitly selected Sent companies in Send Mode")
+    if any(c.status == "sent" and c.id not in authorized_resends for c in companies):
         raise ValueError("Already Sent companies cannot be drafted or sent again")
     if len({c.id for c in companies}) != len(companies):
         raise ValueError("Duplicate selections are not allowed")

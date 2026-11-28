@@ -22,6 +22,30 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ApplicationTests(unittest.TestCase):
+    def test_resend_requires_exact_explicit_sent_recipients_and_send_mode(self):
+        sent = self.company.model_copy(update={"status": "sent"})
+        self.store._write([sent])
+        client = SimpleNamespace(connect=lambda: self.fail("Invalid resend must not connect"))
+        for mode, ids, rows in (("draft", [sent.id], [sent]), ("send", ["wrong"], [sent]),
+                                ("send", [sent.id, "extra"], [sent]), ("send", [sent.id], [self.company])):
+            with self.assertRaises(ValueError):
+                asyncio.run(run_batch(self.store, client, rows, "Hi", str(self.pdf), mode,
+                    lambda *args: None, resend_ids=ids))
+        calls = []
+        class ResendClient:
+            @asynccontextmanager
+            async def connect(self):
+                yield self
+            def require_tool(self, mode):
+                return SimpleNamespace(name="send_email")
+            async def deliver(self, mode, payload):
+                calls.append((mode, payload["to"]))
+                return "Resent offline"
+        asyncio.run(run_batch(self.store, ResendClient(), [sent], "Hi", str(self.pdf), "send",
+            lambda *args: None, resend_ids=[sent.id]))
+        self.assertEqual(calls, [("send", [sent.hr_email])])
+        self.assertEqual(self.store.load()[0].status, "sent")
+
     def test_sent_company_blocks_entire_draft_or_send_batch_before_connection(self):
         sent = self.company.model_copy(update={"id": "already-sent", "hr_email": "sent@acme.com", "status": "sent"})
         self.store._write([self.company, sent])
@@ -320,6 +344,43 @@ class ApplicationTests(unittest.TestCase):
 
 
 class DashboardTests(unittest.TestCase):
+    def test_resend_flow_requires_user_selection_send_mode_and_extra_confirmation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sent = Company(company_name="Resend target", hr_email="hr@example.com", status="sent")
+            other = Company(company_name="Not selected", hr_email="other@example.com", status="sent")
+            store = CompanyStore(root / "companies.json")
+            store._write([sent, other])
+            atomic_text(root / "template.txt", "Hello {company_name}")
+            pdf = root / "CV.pdf"
+            pdf.write_bytes(b"%PDF-1.4\n%%EOF")
+            code = (ROOT / "app.py").read_text(encoding="utf-8").replace(
+                "ROOT = Path(__file__).resolve().parent", f"ROOT = Path({str(root)!r})")
+            environment = {"CV_FILE_PATH": str(pdf), "MCP_SERVER_COMMAND": sys.executable,
+                           "MCP_SERVER_ARGS": json.dumps([str(ROOT / "tests" / "fake_mcp_server.py")])}
+            with patch.dict(os.environ, environment):
+                app = AppTest.from_string(code, default_timeout=30).run()
+                button = lambda label: next(b for b in app.button if b.label == label)
+                button("Resend sent emails…").click().run()
+                self.assertEqual(app.session_state.workspace_section, "batch")
+                self.assertEqual(app.session_state.resend_company_ids, [])
+                next(m for m in app.multiselect if m.key == "resend_company_ids").set_value([sent.id]).run()
+                self.assertTrue(button("Review resend (1)").disabled)
+                next(t for t in app.toggle if t.key == "send_mode").set_value(True).run()
+                button("Review resend (1)").click().run()
+                self.assertFalse(app.exception)
+                self.assertEqual(store.load(), [sent, other])
+                next(c for c in app.checkbox if c.label.startswith("I reviewed To")).check().run()
+                self.assertTrue(button("Confirm and start").disabled)
+                next(c for c in app.checkbox if c.key == "confirm_resend_acknowledged").check().run()
+                button("Confirm and start").click().run()
+                self.assertFalse(app.exception)
+                saved = store.load()
+                self.assertEqual(saved[0].status, "sent")
+                self.assertIn("fixture-message-id", saved[0].last_result.lower())
+                self.assertEqual(saved[1], other)
+                self.assertEqual(app.session_state.resend_company_ids, [])
+
     def test_stale_sent_selection_is_removed_from_batch_actions(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -553,6 +553,15 @@ The shared header shows Pending, Drafted, Sent, and Failed totals. **View compan
 by status** opens a read-only numbered table with descriptions and recorded failure
 reasons. Sent companies cannot be selected for another draft or send batch.
 
+To deliberately send again, click **Resend sent emails…** in Company queue. In
+Batch activity, enable **Send Mode (Direct Send)**, open **Resend previously sent
+emails**, and manually choose the Sent companies. Click **Review resend**, inspect
+the current template, attachment, and all recipients, then tick both review and
+intentional-resend confirmations before starting. This sends a new email; it does
+not reset Sent records to Pending or enable automatic retries. Normal selection
+continues to block Sent companies, and backend execution requires the exact
+explicitly authorized resend IDs.
+
 **Check sent drafts** defaults to Drafted companies. Select Sent or Failed separately
 when correcting recorded outcomes. The optional delivery checker matches Gmail
 failure notices to the latest application by recipient, subject, thread, and date.
